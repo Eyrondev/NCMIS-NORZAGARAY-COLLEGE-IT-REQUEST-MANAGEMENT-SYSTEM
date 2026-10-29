@@ -43,6 +43,124 @@ def _parse_tokens(value):
     return set(t.strip() for t in re.split(r"[,;\n]+", str(value)) if t and t.strip())
 
 
+def _split_part_label(value):
+    """Split a catalog suggestion label (``Item — Brand``) into its parts.
+
+    The `/part-suggestions` endpoint stores labels in the PC row using the
+    format ``item_name — brand_model``.  Looking that whole string up against
+    `devices_full` never matches, so replacement tracking needs to split it.
+    """
+    text = str(value or '').strip()
+    for sep in (' — ', ' – ', ' - '):
+        if sep in text:
+            item_name, brand_model = text.split(sep, 1)
+            item_name, brand_model = item_name.strip(), brand_model.strip()
+            if item_name and brand_model:
+                return item_name, brand_model
+    return None, None
+
+
+def _token_is_unique_device(cur, token):
+    """True when `token` identifies one physical row (accession id or serial).
+
+    Generic labels/names can be shared by several units and must not be
+    treated as "referenced elsewhere" just because another PC uses the same
+    display text.
+    """
+    token = str(token or '').strip()
+    if not token:
+        return False
+    try:
+        int(token)
+        return True
+    except (TypeError, ValueError):
+        pass
+    try:
+        cur.execute(
+            "SELECT 1 FROM devices_full WHERE serial_no = %s OR municipal_serial_no = %s LIMIT 1",
+            (token, token),
+        )
+        return cur.fetchone() is not None
+    except Exception:
+        return False
+
+
+def _apply_damaged_status(cur, accession_id, old_status, old_quantity, performed_by=None):
+    """Return one replaced part to Manage Item and give it a Damaged status.
+
+    Non-consumable units are stored with ``quantity = 1`` (0 once assigned),
+    so the old code's ``quantity IS NULL`` check never matched and the row
+    stayed ``IN USE``.  Treat quantity ``0``/``1`` as a single unit and mark
+    it Damaged; only genuine stock rows (quantity > 1) get a unit added back.
+    """
+    if accession_id is None:
+        return
+
+    try:
+        quantity = int(old_quantity) if old_quantity is not None else None
+    except (TypeError, ValueError):
+        quantity = None
+
+    if quantity is None or quantity <= 1:
+        if quantity is not None and quantity < 1:
+            cur.execute(
+                "UPDATE devices_full SET quantity = %s WHERE accession_id = %s",
+                (1, accession_id),
+            )
+            try:
+                log_inventory_action('DEVICE', accession_id, 'UPDATE', 'quantity', quantity, 1, performed_by)
+            except Exception:
+                pass
+            try:
+                print(f"[mark_damaged] accession_id={accession_id} quantity {quantity} -> 1")
+            except Exception:
+                pass
+
+        if old_status != 'Damaged':
+            cur.execute(
+                "UPDATE devices_full SET status = %s WHERE accession_id = %s",
+                ('Damaged', accession_id),
+            )
+            try:
+                log_inventory_action('DEVICE', accession_id, 'UPDATE', 'status', old_status, 'Damaged', performed_by)
+            except Exception:
+                pass
+            try:
+                print(f"[mark_damaged] accession_id={accession_id} {old_status!r} -> 'Damaged'")
+            except Exception:
+                pass
+        return
+
+    # Genuine stock row: put one returned unit back into the row.
+    new_quantity = quantity + 1
+    cur.execute(
+        "UPDATE devices_full SET quantity = %s WHERE accession_id = %s",
+        (new_quantity, accession_id),
+    )
+    try:
+        log_inventory_action('DEVICE', accession_id, 'UPDATE', 'quantity', quantity, new_quantity, performed_by)
+    except Exception:
+        pass
+    try:
+        print(f"[mark_damaged] accession_id={accession_id} quantity {quantity} -> {new_quantity}")
+    except Exception:
+        pass
+
+    if str(old_status or '').strip().lower() == 'in use':
+        cur.execute(
+            "UPDATE devices_full SET status = %s WHERE accession_id = %s",
+            ('Damaged', accession_id),
+        )
+        try:
+            log_inventory_action('DEVICE', accession_id, 'UPDATE', 'status', old_status, 'Damaged', performed_by)
+        except Exception:
+            pass
+        try:
+            print(f"[mark_damaged] accession_id={accession_id} {old_status!r} -> 'Damaged'")
+        except Exception:
+            pass
+
+
 def _mark_device_values_in_use(cur, value, performed_by=None):
     """Mark devices referenced by `value` as IN USE.
     Supports accession_id, exact serials, and partial case-insensitive name/brand matches.
@@ -182,14 +300,35 @@ def _mark_device_values_in_use(cur, value, performed_by=None):
                                 pass
             continue
 
-        # partial, case-insensitive match on item_name or brand_model — pick one representative row
-        like = f"%{token.lower()}%"
-        cur.execute("SELECT accession_id, status, quantity, device_type FROM devices_full WHERE LOWER(item_name) LIKE %s OR LOWER(brand_model) LIKE %s ORDER BY accession_id LIMIT 1", (like, like))
-        row = cur.fetchone()
+        # Catalog labels are stored as "Item — Brand"; match both halves first.
+        item_name, brand_model = _split_part_label(token)
+        row = None
+        matched_by = None
+        if item_name and brand_model:
+            cur.execute(
+                "SELECT accession_id, status, quantity, device_type FROM devices_full "
+                "WHERE LOWER(TRIM(item_name)) = %s "
+                "AND LOWER(TRIM(COALESCE(brand_model, ''))) = %s "
+                "ORDER BY CASE WHEN LOWER(COALESCE(status, '')) = 'in use' THEN 2 "
+                "WHEN LOWER(COALESCE(status, '')) LIKE 'damaged%%' THEN 2 ELSE 0 END, "
+                "accession_id LIMIT 1",
+                (item_name.lower(), brand_model.lower()),
+            )
+            row = cur.fetchone()
+            if row:
+                matched_by = 'label'
+
+        if not row:
+            # partial, case-insensitive match on item_name or brand_model — pick one representative row
+            like = f"%{token.lower()}%"
+            cur.execute("SELECT accession_id, status, quantity, device_type FROM devices_full WHERE LOWER(item_name) LIKE %s OR LOWER(brand_model) LIKE %s ORDER BY accession_id LIMIT 1", (like, like))
+            row = cur.fetchone()
+            if row:
+                matched_by = 'partial-name'
         if row:
             try:
                 aid = row.get('accession_id') if isinstance(row, dict) else row[0]
-                print(f"[mark_in_use] partial-name match token={token!r} matched_accession_id={aid}")
+                print(f"[mark_in_use] {matched_by} match token={token!r} matched_accession_id={aid}")
             except Exception:
                 aid = row.get('accession_id') if isinstance(row, dict) else row[0]
             old_status = row.get('status') if isinstance(row, dict) else row[1]
@@ -336,20 +475,25 @@ def _mark_device_values_damaged(cur, value, exclude_pcid=None, performed_by=None
     """Mark devices referenced by `value` as Damaged and return them to Manage Item list.
 
     Behavior:
-      - For single accession rows (quantity is NULL) set `status = 'Damaged'`.
-      - For stock/quantity rows (quantity is NOT NULL) increment `quantity` by 1
-        (do not change overall row status to avoid marking entire stock as damaged).
-      - Skip tokens that are still referenced by other active PCs.
+      - Single-unit items (quantity is NULL, 0, or 1) are stored one row per
+        physical device. Restore quantity to 1 and set `status = 'Damaged'`.
+      - Genuine stock rows (quantity > 1) get one unit added back and become
+        Damaged when the row was fully in use.
+      - Skip tokens that are still referenced by other active PCs, but only
+        when the token uniquely identifies a device (accession id/serial).
+        Display labels such as "Motherboard — Asus B650M" can be shared by
+        many units and must not be skipped for that reason.
     """
     if not value:
         return
 
-    tokens = _parse_tokens(value)
-    for token in tokens:
+    for token in _parse_tokens(value):
         try:
             print(f"[mark_damaged] token={token!r}")
         except Exception:
             pass
+
+        token_is_unique = _token_is_unique_device(cur, token)
 
         # try accession id
         try:
@@ -367,44 +511,16 @@ def _mark_device_values_damaged(cur, value, exclude_pcid=None, performed_by=None
                     pass
                 continue
 
-            old_status = row.get('status') if isinstance(row, dict) else row[1]
-            old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
-            try:
-                cur_qty = int(old_qty) if old_qty is not None else None
-            except Exception:
-                cur_qty = None
-
-            if _is_token_referenced_elsewhere(cur, token, exclude_pcid):
+            if token_is_unique and _is_token_referenced_elsewhere(cur, token, exclude_pcid):
                 try:
                     print(f"[mark_damaged] accession_id={aid} still referenced elsewhere; skipping")
                 except Exception:
                     pass
                 continue
 
-            if cur_qty is None:
-                # single device -> mark Damaged
-                if old_status != 'Damaged':
-                    cur.execute("UPDATE devices_full SET status = %s WHERE accession_id = %s", ('Damaged', aid))
-                    try:
-                        log_inventory_action('DEVICE', aid, 'UPDATE', 'status', old_status, 'Damaged', performed_by)
-                    except Exception:
-                        pass
-                    try:
-                        print(f"[mark_damaged] accession_id={aid} {old_status!r} -> 'Damaged'")
-                    except Exception:
-                        pass
-            else:
-                # stock item -> increment quantity but do not change status for the row
-                new_qty = cur_qty + 1
-                cur.execute("UPDATE devices_full SET quantity = %s WHERE accession_id = %s", (new_qty, aid))
-                try:
-                    log_inventory_action('DEVICE', aid, 'UPDATE', 'quantity', cur_qty, new_qty, performed_by)
-                except Exception:
-                    pass
-                try:
-                    print(f"[mark_damaged] accession_id={aid} quantity {cur_qty} -> {new_qty} (marked as returned damaged)")
-                except Exception:
-                    pass
+            old_status = row.get('status') if isinstance(row, dict) else row[1]
+            old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
+            _apply_damaged_status(cur, aid, old_status, old_qty, performed_by)
             continue
 
         # serial / municipal serial matches
@@ -420,198 +536,65 @@ def _mark_device_values_damaged(cur, value, exclude_pcid=None, performed_by=None
                 aid = row.get('accession_id') if isinstance(row, dict) else row[0]
                 old_status = row.get('status') if isinstance(row, dict) else row[1]
                 old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
-                try:
-                    cur_qty = int(old_qty) if old_qty is not None else None
-                except Exception:
-                    cur_qty = None
 
-                if _is_token_referenced_elsewhere(cur, token, exclude_pcid):
+                if token_is_unique and _is_token_referenced_elsewhere(cur, token, exclude_pcid):
                     try:
                         print(f"[mark_damaged] accession_id={aid} still referenced elsewhere; skipping")
                     except Exception:
                         pass
                     continue
 
-                if cur_qty is None:
-                    if old_status != 'Damaged':
-                        cur.execute("UPDATE devices_full SET status = %s WHERE accession_id = %s", ('Damaged', aid))
-                        try:
-                            log_inventory_action('DEVICE', aid, 'UPDATE', 'status', old_status, 'Damaged', performed_by)
-                        except Exception:
-                            pass
-                        try:
-                            print(f"[mark_damaged] accession_id={aid} {old_status!r} -> 'Damaged'")
-                        except Exception:
-                            pass
-                else:
-                    new_qty = cur_qty + 1
-                    cur.execute("UPDATE devices_full SET quantity = %s WHERE accession_id = %s", (new_qty, aid))
-                    try:
-                        log_inventory_action('DEVICE', aid, 'UPDATE', 'quantity', cur_qty, new_qty, performed_by)
-                    except Exception:
-                        pass
-                    try:
-                        print(f"[mark_damaged] accession_id={aid} quantity {cur_qty} -> {new_qty} (marked as returned damaged)")
-                    except Exception:
-                        pass
+                _apply_damaged_status(cur, aid, old_status, old_qty, performed_by)
             continue
 
-        # partial name/brand matches - pick representative row
-        like = f"%{token.lower()}%"
-        cur.execute("SELECT accession_id, status, quantity FROM devices_full WHERE LOWER(item_name) LIKE %s OR LOWER(brand_model) LIKE %s ORDER BY accession_id LIMIT 1", (like, like))
-        row = cur.fetchone()
+        # Catalog labels are stored as "Item — Brand"; match both halves first.
+        item_name, brand_model = _split_part_label(token)
+        row = None
+        if item_name and brand_model:
+            cur.execute(
+                "SELECT accession_id, status, quantity FROM devices_full "
+                "WHERE LOWER(TRIM(item_name)) = %s "
+                "AND LOWER(TRIM(COALESCE(brand_model, ''))) = %s "
+                "ORDER BY CASE WHEN LOWER(COALESCE(status, '')) = 'in use' THEN 0 "
+                "WHEN LOWER(COALESCE(status, '')) LIKE 'damaged%%' THEN 2 ELSE 1 END, "
+                "accession_id LIMIT 1",
+                (item_name.lower(), brand_model.lower()),
+            )
+            row = cur.fetchone()
+            if row:
+                try:
+                    matched_aid = row.get('accession_id') if isinstance(row, dict) else row[0]
+                    print(f"[mark_damaged] label match token={token!r} matched_accession_id={matched_aid}")
+                except Exception:
+                    pass
+
+        if not row:
+            # partial name/brand matches - pick representative row
+            like = f"%{token.lower()}%"
+            cur.execute(
+                "SELECT accession_id, status, quantity FROM devices_full "
+                "WHERE LOWER(item_name) LIKE %s OR LOWER(COALESCE(brand_model, '')) LIKE %s "
+                "ORDER BY CASE WHEN LOWER(COALESCE(status, '')) = 'in use' THEN 0 "
+                "WHEN LOWER(COALESCE(status, '')) LIKE 'damaged%%' THEN 2 ELSE 1 END, "
+                "accession_id LIMIT 1",
+                (like, like),
+            )
+            row = cur.fetchone()
+
         if row:
-            try:
-                aid = row.get('accession_id') if isinstance(row, dict) else row[0]
-                print(f"[mark_damaged] partial-name match token={token!r} matched_accession_id={aid}")
-            except Exception:
-                aid = row.get('accession_id') if isinstance(row, dict) else row[0]
+            aid = row.get('accession_id') if isinstance(row, dict) else row[0]
             old_status = row.get('status') if isinstance(row, dict) else row[1]
             old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
-            try:
-                cur_qty = int(old_qty) if old_qty is not None else None
-            except Exception:
-                cur_qty = None
 
-            if _is_token_referenced_elsewhere(cur, token, exclude_pcid):
+            if token_is_unique and _is_token_referenced_elsewhere(cur, token, exclude_pcid):
                 try:
                     print(f"[mark_damaged] accession_id={aid} still referenced elsewhere; skipping")
                 except Exception:
                     pass
             else:
-                if cur_qty is None:
-                    if old_status != 'Damaged':
-                        cur.execute("UPDATE devices_full SET status = %s WHERE accession_id = %s", ('Damaged', aid))
-                        try:
-                            log_inventory_action('DEVICE', aid, 'UPDATE', 'status', old_status, 'Damaged', performed_by)
-                        except Exception:
-                            pass
-                        try:
-                            print(f"[mark_damaged] accession_id={aid} {old_status!r} -> 'Damaged'")
-                        except Exception:
-                            pass
-                else:
-                    new_qty = cur_qty + 1
-                    cur.execute("UPDATE devices_full SET quantity = %s WHERE accession_id = %s", (new_qty, aid))
-                    try:
-                        log_inventory_action('DEVICE', aid, 'UPDATE', 'quantity', cur_qty, new_qty, performed_by)
-                    except Exception:
-                        pass
-                    try:
-                        print(f"[mark_damaged] accession_id={aid} quantity {cur_qty} -> {new_qty} (marked as returned damaged)")
-                    except Exception:
-                        pass
+                _apply_damaged_status(cur, aid, old_status, old_qty, performed_by)
         continue
 
-        # serial / municipal serial matches
-        cur.execute("SELECT accession_id, status, quantity, device_type FROM devices_full WHERE serial_no = %s OR municipal_serial_no = %s", (token, token))
-        rows = cur.fetchall()
-        if rows:
-            try:
-                matched = [(r.get('accession_id') if isinstance(r, dict) else r[0]) for r in rows]
-                print(f"[release] serial/municipal match token={token!r} matched_accession_ids={matched}")
-            except Exception:
-                pass
-            for row in rows:
-                aid = row.get('accession_id') if isinstance(row, dict) else row[0]
-                old_status = row.get('status') if isinstance(row, dict) else row[1]
-                old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
-                try:
-                    cur_qty = int(old_qty) if old_qty is not None else None
-                except Exception:
-                    cur_qty = None
-
-                if _is_token_referenced_elsewhere(cur, token, exclude_pcid):
-                    try:
-                        print(f"[release] accession_id={aid} still referenced elsewhere; skipping")
-                    except Exception:
-                        pass
-                    continue
-
-                if cur_qty is None:
-                    if old_status != 'Available':
-                        cur.execute("UPDATE devices_full SET status = %s WHERE accession_id = %s", ('Available', aid))
-                        try:
-                            log_inventory_action('DEVICE', aid, 'UPDATE', 'status', old_status, 'Available', performed_by)
-                        except Exception:
-                            pass
-                        try:
-                            print(f"[release] updated accession_id={aid} {old_status!r} -> 'Available'")
-                        except Exception:
-                            pass
-                else:
-                    new_qty = cur_qty + 1
-                    cur.execute("UPDATE devices_full SET quantity = %s WHERE accession_id = %s", (new_qty, aid))
-                    try:
-                        log_inventory_action('DEVICE', aid, 'UPDATE', 'quantity', cur_qty, new_qty, performed_by)
-                    except Exception:
-                        pass
-                    if old_status != 'Available':
-                        cur.execute("UPDATE devices_full SET status = %s WHERE accession_id = %s", ('Available', aid))
-                        try:
-                            log_inventory_action('DEVICE', aid, 'UPDATE', 'status', old_status, 'Available', performed_by)
-                        except Exception:
-                            pass
-                    try:
-                        print(f"[release] accession_id={aid} quantity {cur_qty} -> {new_qty} and status -> 'Available'")
-                    except Exception:
-                        pass
-            continue
-
-        # partial name/brand matches
-        like = f"%{token.lower()}%"
-        # For partial-name releases pick one representative row (likely the consumable row)
-        cur.execute("SELECT accession_id, status, quantity, device_type FROM devices_full WHERE LOWER(item_name) LIKE %s OR LOWER(brand_model) LIKE %s ORDER BY accession_id LIMIT 1", (like, like))
-        row = cur.fetchone()
-        if row:
-            try:
-                aid = row.get('accession_id') if isinstance(row, dict) else row[0]
-                print(f"[release] partial-name match token={token!r} matched_accession_id={aid}")
-            except Exception:
-                aid = row.get('accession_id') if isinstance(row, dict) else row[0]
-            old_status = row.get('status') if isinstance(row, dict) else row[1]
-            old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
-            try:
-                cur_qty = int(old_qty) if old_qty is not None else None
-            except Exception:
-                cur_qty = None
-
-            if _is_token_referenced_elsewhere(cur, token, exclude_pcid):
-                try:
-                    print(f"[release] accession_id={aid} still referenced elsewhere; skipping")
-                except Exception:
-                    pass
-            else:
-                if cur_qty is None:
-                    if old_status != 'Available':
-                        cur.execute("UPDATE devices_full SET status = %s WHERE accession_id = %s", ('Available', aid))
-                        try:
-                            log_inventory_action('DEVICE', aid, 'UPDATE', 'status', old_status, 'Available', performed_by)
-                        except Exception:
-                            pass
-                        try:
-                            print(f"[release] updated accession_id={aid} {old_status!r} -> 'Available'")
-                        except Exception:
-                            pass
-                else:
-                    new_qty = cur_qty + 1
-                    cur.execute("UPDATE devices_full SET quantity = %s WHERE accession_id = %s", (new_qty, aid))
-                    try:
-                        log_inventory_action('DEVICE', aid, 'UPDATE', 'quantity', cur_qty, new_qty, performed_by)
-                    except Exception:
-                        pass
-                    if old_status != 'Available':
-                        cur.execute("UPDATE devices_full SET status = %s WHERE accession_id = %s", ('Available', aid))
-                        try:
-                            log_inventory_action('DEVICE', aid, 'UPDATE', 'status', old_status, 'Available', performed_by)
-                        except Exception:
-                            pass
-                    try:
-                        print(f"[release] accession_id={aid} quantity {cur_qty} -> {new_qty} and status -> 'Available'")
-                    except Exception:
-                        pass
-
-   
 
 @manage_pc_bp.route("/delete-pc/<int:pcid>", methods=["POST"])
 def delete_pc(pcid):
