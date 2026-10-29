@@ -31,6 +31,22 @@ function openMaintenanceLog(id, type) {
   window.location.href = `/maintenance-history?type=${type}&id=${id}`;
 }
 
+// ---------- PART REPLACEMENT ----------
+// Pages without replace_part.js still get working row buttons.
+if (typeof window.openReplacementHistory !== 'function') {
+  window.openReplacementHistory = function (pcid) {
+    if (!pcid) return;
+    window.location.href = `/pc-replacement-history?pcid=${encodeURIComponent(pcid)}`;
+  };
+}
+if (typeof window.openReplacePartModal !== 'function') {
+  window.openReplacePartModal = function () {
+    if (typeof showPopup === 'function') {
+      showPopup('error', 'Replace Part is only available on the Manage Inventory page.');
+    }
+  };
+}
+
 // ---------- CHECK / BULK CHECK ----------
 function markPcChecked(pcid) {
   if (!confirm("Mark this PC as checked?")) return;
@@ -996,6 +1012,12 @@ function renderPcDesktopRows(pcs, canEdit) {
           <button onclick="openPcModalById(${Number(pc.pcid)})" class="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded-lg text-xs shadow whitespace-nowrap flex items-center gap-1">
             <i data-lucide="pencil" class="w-3 h-3"></i> Edit
           </button>
+          <button onclick="openReplacePartModal(${Number(pc.pcid)}, this)" class="replace-part-btn bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg text-xs shadow whitespace-nowrap flex items-center gap-1">
+            <i data-lucide="repeat" class="w-3 h-3"></i> Replace Part
+          </button>
+          <button onclick="openReplacementHistory(${Number(pc.pcid)})" class="bg-slate-500 hover:bg-slate-600 text-white px-2 py-1 rounded-lg text-xs shadow whitespace-nowrap flex items-center gap-1">
+            <i data-lucide="history" class="w-3 h-3"></i> Replacements
+          </button>
           <button type="button" onclick="openDeleteModal('/delete-pc/${encodeURIComponent(pc.pcid)}')" class="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded-lg text-xs shadow whitespace-nowrap flex items-center gap-1">
             <i data-lucide="trash-2" class="w-3 h-3"></i> Archive
           </button>
@@ -1071,6 +1093,12 @@ function renderPcMobileCards(pcs, canEdit) {
       <div class="grid grid-cols-2 gap-2">
         <button onclick="openPcModalById(${Number(pc.pcid)})" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-medium transition flex items-center justify-center gap-1">
           <i data-lucide="pencil" class="w-3 h-3"></i> Edit
+        </button>
+        <button onclick="openReplacePartModal(${Number(pc.pcid)}, this)" class="replace-part-btn bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-xs font-medium transition flex items-center justify-center gap-1">
+          <i data-lucide="repeat" class="w-3 h-3"></i> Replace Part
+        </button>
+        <button onclick="openReplacementHistory(${Number(pc.pcid)})" class="bg-slate-500 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-xs font-medium transition flex items-center justify-center gap-1">
+          <i data-lucide="history" class="w-3 h-3"></i> Replacements
         </button>
         <button type="button" onclick="openDeleteModal('/delete-pc/${encodeURIComponent(pc.pcid)}')" class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-xs font-medium transition flex items-center justify-center gap-1">
           <i data-lucide="trash-2" class="w-3 h-3"></i> Delete

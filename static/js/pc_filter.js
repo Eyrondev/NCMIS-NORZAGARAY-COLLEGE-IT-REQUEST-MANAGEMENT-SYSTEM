@@ -133,6 +133,9 @@ function renderPcTable(pcs) {
 
          
                     <button onclick="openPcModalById(${pc.pcid})" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 rounded text-xs font-medium transition">Edit</button>
+
+                    <button onclick="openReplacePartModal(${pc.pcid}, this)" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded text-xs font-medium transition">Replace Part</button>
+                    <button onclick="openReplacementHistory(${pc.pcid})" class="bg-slate-500 hover:bg-slate-600 text-white px-3 py-2 rounded text-xs font-medium transition">Replacements</button>
                     
 <button onclick="openDeleteModal('/delete-pc/${pc.pcid}')"
 class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded text-xs font-medium transition">

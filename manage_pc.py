@@ -85,21 +85,31 @@ def _token_is_unique_device(cur, token):
         return False
 
 
-def _apply_damaged_status(cur, accession_id, old_status, old_quantity, performed_by=None):
-    """Return one replaced part to Manage Item and give it a Damaged status.
+def _apply_returned_status(cur, accession_id, old_status, old_quantity, new_status, performed_by=None):
+    """Return one replaced part to Manage Item with ``new_status``.
 
     Non-consumable units are stored with ``quantity = 1`` (0 once assigned),
     so the old code's ``quantity IS NULL`` check never matched and the row
-    stayed ``IN USE``.  Treat quantity ``0``/``1`` as a single unit and mark
-    it Damaged; only genuine stock rows (quantity > 1) get a unit added back.
+    stayed ``IN USE``.  Treat quantity ``0``/``1`` as a single unit and set
+    its status; only genuine stock rows (quantity > 1) get a unit added back.
+
+    Returns a dict describing the change, or ``None`` when nothing was done.
     """
     if accession_id is None:
-        return
+        return None
 
     try:
         quantity = int(old_quantity) if old_quantity is not None else None
     except (TypeError, ValueError):
         quantity = None
+
+    tag = 'mark_damaged' if new_status == 'Damaged' else 'release'
+    detail = {
+        'accession_id': accession_id,
+        'old_status': old_status,
+        'new_status': new_status,
+        'old_quantity': quantity,
+    }
 
     if quantity is None or quantity <= 1:
         if quantity is not None and quantity < 1:
@@ -112,24 +122,25 @@ def _apply_damaged_status(cur, accession_id, old_status, old_quantity, performed
             except Exception:
                 pass
             try:
-                print(f"[mark_damaged] accession_id={accession_id} quantity {quantity} -> 1")
+                print(f"[{tag}] accession_id={accession_id} quantity {quantity} -> 1")
             except Exception:
                 pass
+        detail['new_quantity'] = 1 if quantity is None or quantity < 1 else quantity
 
-        if old_status != 'Damaged':
+        if str(old_status or '').strip().lower() != new_status.lower():
             cur.execute(
                 "UPDATE devices_full SET status = %s WHERE accession_id = %s",
-                ('Damaged', accession_id),
+                (new_status, accession_id),
             )
             try:
-                log_inventory_action('DEVICE', accession_id, 'UPDATE', 'status', old_status, 'Damaged', performed_by)
+                log_inventory_action('DEVICE', accession_id, 'UPDATE', 'status', old_status, new_status, performed_by)
             except Exception:
                 pass
             try:
-                print(f"[mark_damaged] accession_id={accession_id} {old_status!r} -> 'Damaged'")
+                print(f"[{tag}] accession_id={accession_id} {old_status!r} -> {new_status!r}")
             except Exception:
                 pass
-        return
+        return detail
 
     # Genuine stock row: put one returned unit back into the row.
     new_quantity = quantity + 1
@@ -142,23 +153,149 @@ def _apply_damaged_status(cur, accession_id, old_status, old_quantity, performed
     except Exception:
         pass
     try:
-        print(f"[mark_damaged] accession_id={accession_id} quantity {quantity} -> {new_quantity}")
+        print(f"[{tag}] accession_id={accession_id} quantity {quantity} -> {new_quantity}")
     except Exception:
         pass
+    detail['new_quantity'] = new_quantity
 
+    # Only a row that was fully in use changes status; a stock row that was
+    # already Available stays Available even when the unit came back damaged.
     if str(old_status or '').strip().lower() == 'in use':
         cur.execute(
             "UPDATE devices_full SET status = %s WHERE accession_id = %s",
-            ('Damaged', accession_id),
+            (new_status, accession_id),
         )
         try:
-            log_inventory_action('DEVICE', accession_id, 'UPDATE', 'status', old_status, 'Damaged', performed_by)
+            log_inventory_action('DEVICE', accession_id, 'UPDATE', 'status', old_status, new_status, performed_by)
         except Exception:
             pass
         try:
-            print(f"[mark_damaged] accession_id={accession_id} {old_status!r} -> 'Damaged'")
+            print(f"[{tag}] accession_id={accession_id} {old_status!r} -> {new_status!r}")
         except Exception:
             pass
+
+    return detail
+
+
+def _resolve_replaced_device_rows(cur, token):
+    """Return device rows referenced by a PC part token.
+
+    Handles accession ids, exact serials, catalog labels (``Item — Brand``)
+    and finally partial name/brand matches.  Label/partial matches pick the
+    most likely assigned row first (IN USE, then other, then damaged).
+    """
+    token = str(token or '').strip()
+    if not token:
+        return []
+
+    try:
+        aid = int(token)
+    except (TypeError, ValueError):
+        aid = None
+
+    if aid is not None:
+        cur.execute(
+            "SELECT accession_id, status, quantity FROM devices_full WHERE accession_id = %s",
+            (aid,),
+        )
+        row = cur.fetchone()
+        return [row] if row else []
+
+    cur.execute(
+        "SELECT accession_id, status, quantity FROM devices_full "
+        "WHERE serial_no = %s OR municipal_serial_no = %s",
+        (token, token),
+    )
+    rows = cur.fetchall()
+    if rows:
+        return rows
+
+    item_name, brand_model = _split_part_label(token)
+    if item_name and brand_model:
+        cur.execute(
+            "SELECT accession_id, status, quantity FROM devices_full "
+            "WHERE LOWER(TRIM(item_name)) = %s "
+            "AND LOWER(TRIM(COALESCE(brand_model, ''))) = %s "
+            "ORDER BY CASE WHEN LOWER(COALESCE(status, '')) = 'in use' THEN 0 "
+            "WHEN LOWER(COALESCE(status, '')) LIKE 'damaged%%' THEN 2 ELSE 1 END, "
+            "accession_id LIMIT 1",
+            (item_name.lower(), brand_model.lower()),
+        )
+        row = cur.fetchone()
+        if row:
+            return [row]
+
+    like = f"%{token.lower()}%"
+    cur.execute(
+        "SELECT accession_id, status, quantity FROM devices_full "
+        "WHERE LOWER(item_name) LIKE %s OR LOWER(COALESCE(brand_model, '')) LIKE %s "
+        "ORDER BY CASE WHEN LOWER(COALESCE(status, '')) = 'in use' THEN 0 "
+        "WHEN LOWER(COALESCE(status, '')) LIKE 'damaged%%' THEN 2 ELSE 1 END, "
+        "accession_id LIMIT 1",
+        (like, like),
+    )
+    row = cur.fetchone()
+    return [row] if row else []
+
+
+def _return_replaced_part(cur, value, mark_damaged=False, exclude_pcid=None, performed_by=None, collected=None):
+    """Return part(s) removed from a PC to Manage Item and report the changes.
+
+    ``mark_damaged=False`` returns the old part as Available; ``True`` marks
+    it Damaged.  Returns a list of change details (also appended to
+    ``collected`` when supplied).
+    """
+    if collected is None:
+        collected = []
+    if not value:
+        return collected
+
+    target_status = 'Damaged' if mark_damaged else 'Available'
+    for token in _parse_tokens(value):
+        try:
+            print(f"[return_part] token={token!r} -> {target_status}")
+        except Exception:
+            pass
+
+        token_is_unique = _token_is_unique_device(cur, token)
+        for row in _resolve_replaced_device_rows(cur, token):
+            aid = row.get('accession_id') if isinstance(row, dict) else row[0]
+            old_status = row.get('status') if isinstance(row, dict) else row[1]
+            old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
+
+            if token_is_unique and _is_token_referenced_elsewhere(cur, token, exclude_pcid):
+                try:
+                    print(f"[return_part] accession_id={aid} still referenced elsewhere; skipping")
+                except Exception:
+                    pass
+                continue
+
+            detail = _apply_returned_status(cur, aid, old_status, old_qty, target_status, performed_by)
+            if detail:
+                detail['token'] = token
+                collected.append(detail)
+    return collected
+
+
+def _ensure_part_replacement_table(cur):
+    """Create the part-replacement report table on installs that lack it."""
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pc_part_replacements (
+            replacement_id INT AUTO_INCREMENT PRIMARY KEY,
+            pcid INT NOT NULL,
+            part VARCHAR(64) NOT NULL,
+            old_value TEXT,
+            new_value TEXT,
+            removed_status VARCHAR(32) DEFAULT NULL,
+            accession_id INT DEFAULT NULL,
+            performed_by INT DEFAULT NULL,
+            remarks TEXT DEFAULT NULL,
+            performed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            KEY idx_pc_part_replacements_pcid (pcid)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+        """
+    )
 
 
 def _mark_device_values_in_use(cur, value, performed_by=None):
@@ -471,7 +608,7 @@ def _release_device_values_if_unreferenced(cur, value, exclude_pcid=None, perfor
             continue
 
 
-def _mark_device_values_damaged(cur, value, exclude_pcid=None, performed_by=None):
+def _mark_device_values_damaged(cur, value, exclude_pcid=None, performed_by=None, collected=None):
     """Mark devices referenced by `value` as Damaged and return them to Manage Item list.
 
     Behavior:
@@ -484,116 +621,14 @@ def _mark_device_values_damaged(cur, value, exclude_pcid=None, performed_by=None
         Display labels such as "Motherboard — Asus B650M" can be shared by
         many units and must not be skipped for that reason.
     """
-    if not value:
-        return
-
-    for token in _parse_tokens(value):
-        try:
-            print(f"[mark_damaged] token={token!r}")
-        except Exception:
-            pass
-
-        token_is_unique = _token_is_unique_device(cur, token)
-
-        # try accession id
-        try:
-            aid = int(token)
-        except Exception:
-            aid = None
-
-        if aid is not None:
-            cur.execute("SELECT accession_id, status, quantity FROM devices_full WHERE accession_id = %s", (aid,))
-            row = cur.fetchone()
-            if not row:
-                try:
-                    print(f"[mark_damaged] accession_id {aid} not found")
-                except Exception:
-                    pass
-                continue
-
-            if token_is_unique and _is_token_referenced_elsewhere(cur, token, exclude_pcid):
-                try:
-                    print(f"[mark_damaged] accession_id={aid} still referenced elsewhere; skipping")
-                except Exception:
-                    pass
-                continue
-
-            old_status = row.get('status') if isinstance(row, dict) else row[1]
-            old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
-            _apply_damaged_status(cur, aid, old_status, old_qty, performed_by)
-            continue
-
-        # serial / municipal serial matches
-        cur.execute("SELECT accession_id, status, quantity FROM devices_full WHERE serial_no = %s OR municipal_serial_no = %s", (token, token))
-        rows = cur.fetchall()
-        if rows:
-            try:
-                matched = [(r.get('accession_id') if isinstance(r, dict) else r[0]) for r in rows]
-                print(f"[mark_damaged] serial match token={token!r} matched_accession_ids={matched}")
-            except Exception:
-                pass
-            for row in rows:
-                aid = row.get('accession_id') if isinstance(row, dict) else row[0]
-                old_status = row.get('status') if isinstance(row, dict) else row[1]
-                old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
-
-                if token_is_unique and _is_token_referenced_elsewhere(cur, token, exclude_pcid):
-                    try:
-                        print(f"[mark_damaged] accession_id={aid} still referenced elsewhere; skipping")
-                    except Exception:
-                        pass
-                    continue
-
-                _apply_damaged_status(cur, aid, old_status, old_qty, performed_by)
-            continue
-
-        # Catalog labels are stored as "Item — Brand"; match both halves first.
-        item_name, brand_model = _split_part_label(token)
-        row = None
-        if item_name and brand_model:
-            cur.execute(
-                "SELECT accession_id, status, quantity FROM devices_full "
-                "WHERE LOWER(TRIM(item_name)) = %s "
-                "AND LOWER(TRIM(COALESCE(brand_model, ''))) = %s "
-                "ORDER BY CASE WHEN LOWER(COALESCE(status, '')) = 'in use' THEN 0 "
-                "WHEN LOWER(COALESCE(status, '')) LIKE 'damaged%%' THEN 2 ELSE 1 END, "
-                "accession_id LIMIT 1",
-                (item_name.lower(), brand_model.lower()),
-            )
-            row = cur.fetchone()
-            if row:
-                try:
-                    matched_aid = row.get('accession_id') if isinstance(row, dict) else row[0]
-                    print(f"[mark_damaged] label match token={token!r} matched_accession_id={matched_aid}")
-                except Exception:
-                    pass
-
-        if not row:
-            # partial name/brand matches - pick representative row
-            like = f"%{token.lower()}%"
-            cur.execute(
-                "SELECT accession_id, status, quantity FROM devices_full "
-                "WHERE LOWER(item_name) LIKE %s OR LOWER(COALESCE(brand_model, '')) LIKE %s "
-                "ORDER BY CASE WHEN LOWER(COALESCE(status, '')) = 'in use' THEN 0 "
-                "WHEN LOWER(COALESCE(status, '')) LIKE 'damaged%%' THEN 2 ELSE 1 END, "
-                "accession_id LIMIT 1",
-                (like, like),
-            )
-            row = cur.fetchone()
-
-        if row:
-            aid = row.get('accession_id') if isinstance(row, dict) else row[0]
-            old_status = row.get('status') if isinstance(row, dict) else row[1]
-            old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
-
-            if token_is_unique and _is_token_referenced_elsewhere(cur, token, exclude_pcid):
-                try:
-                    print(f"[mark_damaged] accession_id={aid} still referenced elsewhere; skipping")
-                except Exception:
-                    pass
-            else:
-                _apply_damaged_status(cur, aid, old_status, old_qty, performed_by)
-        continue
+    return _return_replaced_part(
+        cur,
+        value,
+        mark_damaged=True,
+        exclude_pcid=exclude_pcid,
+        performed_by=performed_by,
+        collected=collected,
+    )
 
 
 @manage_pc_bp.route("/delete-pc/<int:pcid>", methods=["POST"])
@@ -1221,6 +1256,14 @@ def replace_pc_part():
     if not pcid or not replacements:
         return jsonify({"success": False, "error": "Invalid request parameters"}), 400
 
+    # Optional flag from the Replace Part modal: mark the removed part as
+    # Damaged instead of returning it to inventory as Available.
+    raw_mark_damaged = data.get('mark_damaged')
+    if isinstance(raw_mark_damaged, str):
+        mark_damaged = raw_mark_damaged.strip().lower() in ('1', 'true', 'yes', 'on', 'damaged')
+    else:
+        mark_damaged = bool(raw_mark_damaged)
+
     # Validate replacement keys
     for p in list(replacements.keys()):
         if p not in allowed_parts:
@@ -1231,6 +1274,16 @@ def replace_pc_part():
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
             # Determine which part columns actually exist in the DB for this install
             existing_parts = _existing_pc_part_columns(cur)
+
+            # Make sure the replacement report table exists before any data is
+            # changed (DDL commits implicitly, so keep it at the start).
+            try:
+                _ensure_part_replacement_table(cur)
+            except Exception as table_error:
+                try:
+                    print(f"[replace_pc_part] Could not create replacement report table: {table_error}")
+                except Exception:
+                    pass
 
             # Determine requested parts that are not present in the DB schema.
             # Attempt to create missing columns automatically (only for
@@ -1321,12 +1374,17 @@ def replace_pc_part():
                     pass
 
             tokens_to_release = old_tokens - new_tokens
+            released_details = []
             for token in tokens_to_release:
                 try:
-                    # When replacing a part, the removed/old part should be marked
-                    # as Damaged and returned to the Manage Item list instead of
-                    # being marked Available. Use specialized helper.
-                    _mark_device_values_damaged(cur, token, exclude_pcid=pcid, performed_by=performed_by)
+                    _return_replaced_part(
+                        cur,
+                        token,
+                        mark_damaged=mark_damaged,
+                        exclude_pcid=pcid,
+                        performed_by=performed_by,
+                        collected=released_details,
+                    )
                 except Exception:
                     pass
 
@@ -1345,6 +1403,42 @@ def replace_pc_part():
                 sql = "UPDATE pcinfofull SET " + ", ".join(set_clauses) + " WHERE pcid = %s"
                 params.append(pcid)
                 cur.execute(sql, params)
+
+            # Record one report row per actually changed part.  The report is
+            # what the per-PC "Replacements" button opens.
+            try:
+                for f in parts_to_check:
+                    old_value = row.get(f)
+                    new_value = replacements.get(f)
+                    try:
+                        unchanged = str(old_value) == str(new_value)
+                    except Exception:
+                        unchanged = old_value == new_value
+                    if unchanged:
+                        continue
+
+                    part_tokens = _parse_tokens(old_value) - _parse_tokens(new_value)
+                    matched = [d for d in released_details if d.get('token') in part_tokens]
+                    detail = matched[0] if matched else {}
+                    cur.execute(
+                        "INSERT INTO pc_part_replacements "
+                        "(pcid, part, old_value, new_value, removed_status, accession_id, performed_by) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        (
+                            pcid,
+                            f,
+                            old_value,
+                            new_value,
+                            detail.get('new_status') or ('Damaged' if mark_damaged else 'Available'),
+                            detail.get('accession_id'),
+                            performed_by,
+                        ),
+                    )
+            except Exception as report_error:
+                try:
+                    print(f"[replace_pc_part] Could not record replacement history: {report_error}")
+                except Exception:
+                    pass
 
             # Audit and mark new values as IN USE
             for part, new_value in replacements.items():
@@ -1372,6 +1466,35 @@ def replace_pc_part():
 
     finally:
         conn.close()
+
+
+@manage_pc_bp.route('/pc-replacement-history')
+def pc_replacement_history():
+    """Part replacement report for one PC (opened from the row button)."""
+    pcid = request.args.get('pcid', type=int)
+    pc = None
+    logs = []
+    conn = get_db_connection()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            _ensure_part_replacement_table(cur)
+            if pcid:
+                cur.execute("SELECT pcid, pcname, serial_no FROM pcinfofull WHERE pcid = %s", (pcid,))
+                pc = cur.fetchone()
+                cur.execute(
+                    "SELECT r.replacement_id, r.pcid, r.part, r.old_value, r.new_value, "
+                    "r.removed_status, r.accession_id, r.performed_at, "
+                    "COALESCE(u.username, 'System') AS performed_by_name "
+                    "FROM pc_part_replacements r "
+                    "LEFT JOIN users u ON u.user_id = r.performed_by "
+                    "WHERE r.pcid = %s "
+                    "ORDER BY r.performed_at DESC, r.replacement_id DESC",
+                    (pcid,),
+                )
+                logs = cur.fetchall()
+    finally:
+        conn.close()
+    return render_template('pc_replacement_history.html', pc=pc, logs=logs, pcid=pcid)
 
 
 @manage_pc_bp.route('/batch_add_pcinfofull', methods=['POST'])

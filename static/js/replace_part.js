@@ -2,6 +2,11 @@
 
 const RP_PARTS = ['monitor','motherboard','ram','storage','gpu','psu','casing','mouse','keyboard','other_parts'];
 
+function openReplacementHistory(pcid) {
+  if (!pcid) return;
+  window.location.href = `/pc-replacement-history?pcid=${encodeURIComponent(pcid)}`;
+}
+
 function getRowForPcid(pcid) {
   const checkbox = document.querySelector(`#pcTableBody input.pc-checkbox[value="${pcid}"]`);
   return checkbox ? checkbox.closest('tr') : null;
@@ -178,6 +183,9 @@ function openReplacePartModal(pcid, triggerEl) {
 
   if (replacePcIdInput) replacePcIdInput.oninput = tryUpdateFromInputId;
 
+  const markDamaged = document.getElementById('replaceMarkDamaged');
+  if (markDamaged) markDamaged.checked = false;
+
   modal.classList.remove('hidden');
   document.body.classList.add('modal-open-pc');
   setTimeout(() => content.classList.add('scale-100'), 50);
@@ -221,11 +229,14 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
+    const markDamagedEl = document.getElementById('replaceMarkDamaged');
+    const markDamaged = !!(markDamagedEl && markDamagedEl.checked);
+
     try {
       const res = await fetch('/replace-pc-part', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pcid: pcid, replacements: replacements })
+        body: JSON.stringify({ pcid: pcid, replacements: replacements, mark_damaged: markDamaged })
       });
       const data = await res.json();
       if (res.ok && data.success) {

@@ -418,6 +418,15 @@
           </div>
         </div>
       </div>
+      <label class="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 cursor-pointer">
+        <input type="checkbox" id="replaceMarkDamaged" class="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500">
+        <span class="text-sm text-gray-700">
+          <span class="font-semibold text-gray-900">Mark removed part as damaged</span>
+          <span class="block text-xs text-gray-500 mt-0.5">
+            Tick this only when the part being replaced is damaged. Otherwise the old part returns to Manage Item as Available.
+          </span>
+        </span>
+      </label>
       <div class="flex justify-end gap-3 pt-4">
         <button type="button" onclick="closeReplacePartModal()" class="btn-gray rp-btn">Cancel</button>
         <button type="submit" class="btn-blue rp-btn"><i data-lucide="save" class="w-4 h-4"></i> Replace</button>
