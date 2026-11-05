@@ -13,6 +13,7 @@ from report import report_bp
 from manage_pc import manage_pc_bp
 from manage_department import manage_department_bp
 from manage_inventory import manage_inventory_bp
+from manage_device import manage_device_bp
 from manage_consumable import manage_consumable_bp
 from notification import notification_bp
 from sidebar import get_user_access
@@ -44,6 +45,7 @@ app.register_blueprint(manage_user_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(manage_department_bp)
 app.register_blueprint(manage_inventory_bp)
+app.register_blueprint(manage_device_bp)
 app.register_blueprint(manage_consumable_bp)
 app.register_blueprint(notification_bp)
 app.register_blueprint(manage_item_bp, url_prefix='/manage_inventory')
@@ -160,6 +162,19 @@ def add_no_cache_headers(response):
             'manage_inventory_bp.bulk_damaged_pcs': ('Mark Selected as Damaged', 'Inventory'),
             'manage_inventory_bp.bulk_damaged_devices': ('Mark Selected as Damaged', 'Inventory'),
             'manage_inventory_bp.bulk_update_devices': ('Update Selected', 'Inventory'),
+
+            # Device management
+            'manage_device_bp.add_device': ('Add Device', 'Device Management'),
+            'manage_device_bp.update_device': ('Edit Device', 'Device Management'),
+            'manage_device_bp.archive_device': ('Archive Device', 'Device Management'),
+            'manage_device_bp.mark_checked': ('Mark as Checked', 'Device Management'),
+            'manage_device_bp.bulk_check': ('Mark Selected as Checked', 'Device Management'),
+            'manage_device_bp.bulk_surrender': ('Surrender Selected', 'Device Management'),
+            'manage_device_bp.bulk_damaged': ('Mark Selected as Damaged', 'Device Management'),
+            'manage_device_bp.risk_update': ('Update Risk Levels', 'Device Management'),
+            'manage_device_bp.import_devices': ('Import File', 'Device Management'),
+            'manage_device_bp.export_devices': ('Export File', 'Device Management'),
+            'manage_device_bp.export_report': ('Export File', 'Device Management'),
 
             # Reports
             'report_bp.export_reports': ('Export File', 'Reports'),

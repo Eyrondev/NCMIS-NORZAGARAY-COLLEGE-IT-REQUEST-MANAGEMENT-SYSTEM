@@ -1,0 +1,756 @@
+<!-- templates/manage_device.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manage Device</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    :root { --md-radius: 12px; }
+    body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
+    .md-card { border-radius: var(--md-radius); }
+    .md-tab-active {
+      background: linear-gradient(120deg, #2563eb 0%, #4f46e5 100%);
+      color: #ffffff;
+      border-color: transparent;
+      box-shadow: 0 10px 22px -12px rgba(37, 99, 235, 0.8);
+    }
+    .md-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: #eef2ff;
+      color: #3730a3;
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .md-table tbody tr:nth-child(even) { background: #fbfcff; }
+    .md-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      border-radius: 9999px; padding: 2px 10px;
+      font-size: 11px; font-weight: 700; line-height: 1.3;
+      white-space: nowrap;
+    }
+    .md-scroll { max-height: calc(100vh - 330px); overflow: auto; }
+    .md-input {
+      width: 100%; height: 40px; padding: 0 12px;
+      border: 1px solid #cbd5e1; border-radius: 10px;
+      background: #fff; color: #0f172a; font-size: 14px;
+      outline: none; transition: border-color .15s, box-shadow .15s;
+    }
+    .md-input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.18); }
+    .md-label { display:block; font-size:12px; font-weight:700; color:#334155; margin-bottom:4px; }
+    .md-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      border-radius: 10px; padding: 8px 13px;
+      font-size: 13px; font-weight: 600; transition: all .15s;
+      white-space: nowrap;
+    }
+    .md-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .md-btn-green { background:#16a34a; color:#fff; }
+    .md-btn-green:hover { background:#15803d; }
+    .md-btn-blue { background:#2563eb; color:#fff; }
+    .md-btn-blue:hover { background:#1d4ed8; }
+    .md-btn-purple { background:#7c3aed; color:#fff; }
+    .md-btn-purple:hover { background:#6d28d9; }
+    .md-btn-red { background:#dc2626; color:#fff; }
+    .md-btn-red:hover { background:#b91c1c; }
+    .md-btn-gray { background:#e2e8f0; color:#334155; }
+    .md-btn-gray:hover { background:#cbd5e1; }
+    .md-modal-backdrop { background: rgba(15,23,42,.6); backdrop-filter: blur(3px); }
+    .md-stat {
+      border-radius: 12px; padding: 14px 16px; border: 1px solid;
+      display:flex; align-items:center; justify-content:space-between;
+    }
+    .md-scope-pc { display:none; }
+    .md-scope-pc.show { display:block; }
+    .md-report-action {
+      display:inline-flex; align-items:center; border-radius:9999px;
+      padding: 2px 9px; font-size:11px; font-weight:700; white-space:nowrap;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+  {% include 'sidebar.html' %}
+
+  <main class="min-h-screen px-4 py-6 transition-all duration-300 md:ml-64 md:px-6">
+    <div class="mx-auto max-w-[1600px] space-y-5">
+
+      <!-- Header -->
+      <header class="md-card bg-white border border-slate-200 shadow-sm p-5">
+        <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div class="flex items-start gap-3">
+            <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600">
+              <i data-lucide="monitor-smartphone" class="h-6 w-6"></i>
+            </div>
+            <div>
+              <h1 class="text-xl font-extrabold text-slate-900">Manage Device</h1>
+              <p class="text-sm text-slate-500">Device register, usage assignment, status checks and modification history.</p>
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <a href="{{ url_for('manage_device_bp.device_page', tab='inventory') }}"
+               class="md-btn md-btn-gray"><i data-lucide="refresh-cw" class="h-4 w-4"></i> Refresh</a>
+            <a href="{{ url_for('manage_device_bp.device_page', tab='report') }}"
+               class="md-btn md-btn-blue"><i data-lucide="clipboard-list" class="h-4 w-4"></i> Modification Report</a>
+          </div>
+        </div>
+
+        <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <div class="md-stat border-slate-200 bg-slate-50">
+            <div><p class="text-[11px] font-bold uppercase tracking-wide text-slate-500">Total Devices</p>
+              <p class="text-2xl font-extrabold text-slate-900">{{ stats.total }}</p></div>
+            <i data-lucide="hard-drive" class="h-7 w-7 text-slate-400"></i>
+          </div>
+          <div class="md-stat border-blue-200 bg-blue-50">
+            <div><p class="text-[11px] font-bold uppercase tracking-wide text-blue-600">In Use</p>
+              <p class="text-2xl font-extrabold text-blue-700">{{ stats.in_use }}</p></div>
+            <i data-lucide="plug" class="h-7 w-7 text-blue-400"></i>
+          </div>
+          <div class="md-stat border-green-200 bg-green-50">
+            <div><p class="text-[11px] font-bold uppercase tracking-wide text-green-600">Available</p>
+              <p class="text-2xl font-extrabold text-green-700">{{ stats.available }}</p></div>
+            <i data-lucide="check-circle-2" class="h-7 w-7 text-green-400"></i>
+          </div>
+          <div class="md-stat border-red-200 bg-red-50">
+            <div><p class="text-[11px] font-bold uppercase tracking-wide text-red-600">Damaged</p>
+              <p class="text-2xl font-extrabold text-red-700">{{ stats.damaged }}</p></div>
+            <i data-lucide="alert-triangle" class="h-7 w-7 text-red-400"></i>
+          </div>
+          <div class="md-stat border-amber-200 bg-amber-50">
+            <div><p class="text-[11px] font-bold uppercase tracking-wide text-amber-600">High Risk</p>
+              <p class="text-2xl font-extrabold text-amber-700">{{ stats.high_risk }}</p></div>
+            <i data-lucide="shield-alert" class="h-7 w-7 text-amber-400"></i>
+          </div>
+        </div>
+      </header>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="space-y-2">
+            {% for category, message in messages %}
+              <div class="rounded-xl border px-4 py-3 text-sm font-medium
+                {% if category == 'success' %}border-green-200 bg-green-50 text-green-700
+                {% elif category == 'danger' %}border-red-200 bg-red-50 text-red-700
+                {% else %}border-blue-200 bg-blue-50 text-blue-700{% endif %}">
+                {{ message }}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <!-- Tabs -->
+      <nav class="md-card bg-white border border-slate-200 shadow-sm p-2 flex flex-col gap-2 sm:flex-row">
+        <button type="button" id="mdTabInventoryBtn" onclick="mdSwitchTab('inventory')"
+          class="md-btn md-tab-active justify-center sm:justify-start">
+          <i data-lucide="boxes" class="h-4 w-4"></i> Device Inventory
+        </button>
+        <button type="button" id="mdTabReportBtn" onclick="mdSwitchTab('report')"
+          class="md-btn justify-center border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 sm:justify-start">
+          <i data-lucide="history" class="h-4 w-4"></i> Modification Report
+          <span class="ml-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-bold text-indigo-700">{{ report_total }}</span>
+        </button>
+      </nav>
+
+      <!-- ================= INVENTORY TAB ================= -->
+      <section id="mdInventorySection" class="space-y-4">
+        <div class="md-card bg-white border border-slate-200 shadow-sm p-4 sm:p-5">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div class="flex flex-wrap gap-2">
+              {% if is_admin == 1 or permissions.get('inventory', {}).get('edit', False) %}
+              <button type="button" onclick="mdOpenAddModal()" class="md-btn md-btn-green">
+                <i data-lucide="plus-circle" class="h-4 w-4"></i> Add Device
+              </button>
+              {% endif %}
+              <button type="button" onclick="mdToggleFilter()" class="md-btn md-btn-blue">
+                <i data-lucide="filter" class="h-4 w-4"></i> Filter
+              </button>
+              {% if is_admin == 1 or permissions.get('inventory', {}).get('edit', False) %}
+              <button type="button" onclick="mdSubmitBulk('{{ url_for('manage_device_bp.bulk_check') }}')" class="md-btn md-btn-green">
+                <i data-lucide="check-square" class="h-4 w-4"></i> Mark Checked
+              </button>
+              <button type="button" onclick="mdSubmitBulk('{{ url_for('manage_device_bp.bulk_surrender') }}')" class="md-btn md-btn-red">
+                <i data-lucide="archive" class="h-4 w-4"></i> Surrender
+              </button>
+              <button type="button" onclick="mdSubmitBulk('{{ url_for('manage_device_bp.bulk_damaged') }}')" class="md-btn md-btn-red">
+                <i data-lucide="alert-triangle" class="h-4 w-4"></i> Mark Damaged
+              </button>
+              <button type="button" onclick="mdSubmitBulk('{{ url_for('manage_device_bp.risk_update') }}')" class="md-btn md-btn-blue">
+                <i data-lucide="refresh-cw" class="h-4 w-4"></i> Update Risk Levels
+              </button>
+              {% endif %}
+              <button type="button" onclick="mdExportSelected()" class="md-btn md-btn-purple">
+                <i data-lucide="download" class="h-4 w-4"></i> Export Selected
+              </button>
+            </div>
+
+            <div class="flex w-full max-w-md items-center gap-2">
+              <div class="relative w-full">
+                <i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"></i>
+                <input id="mdQuickSearch" type="text" autocomplete="off" placeholder="Quick search current page..."
+                  class="md-input pl-9" oninput="mdApplyQuickSearch()">
+              </div>
+              <button type="button" onclick="mdClearQuickSearch()" class="md-btn md-btn-gray">Clear</button>
+            </div>
+          </div>
+
+          {% if is_admin == 1 or permissions.get('inventory', {}).get('edit', False) %}
+          <div class="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-violet-200 bg-violet-50/70 p-3">
+            <span class="text-xs font-bold uppercase tracking-wide text-violet-700">Excel</span>
+            <input id="mdImportFile" type="file" accept=".xlsx,.xls" class="block max-w-[240px] text-xs text-slate-600">
+            <select id="mdImportDuplicate" class="rounded-lg border border-violet-200 bg-white px-2 py-1.5 text-xs">
+              <option value="skip">Skip duplicates</option>
+              <option value="overwrite">Overwrite existing</option>
+            </select>
+            <button type="button" onclick="mdImportDevices()" class="md-btn md-btn-purple">
+              <i data-lucide="upload" class="h-4 w-4"></i> Import
+            </button>
+            <span id="mdImportStatus" class="text-xs font-medium text-slate-600"></span>
+          </div>
+          {% endif %}
+        </div>
+
+        <!-- Filter panel -->
+        <div id="mdFilterPanel" class="md-card hidden bg-white border border-slate-200 shadow-sm p-4">
+          <form method="get" action="{{ url_for('manage_device_bp.device_page') }}" class="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+            <input type="hidden" name="tab" value="inventory">
+            <div>
+              <label class="md-label">Search</label>
+              <input type="text" name="search" value="{{ filters.search }}" placeholder="Item, serial, accountable..." class="md-input">
+            </div>
+            <div>
+              <label class="md-label">Department</label>
+              <select name="department_id" class="md-input">
+                <option value="">All departments</option>
+                {% for dep in departments %}
+                <option value="{{ dep.department_id }}" {% if filters.department_id == dep.department_id %}selected{% endif %}>{{ dep.department_name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="md-label">Status</label>
+              <select name="status" class="md-input">
+                <option value="">All statuses</option>
+                {% for option in status_options %}
+                <option value="{{ option }}" {% if filters.status|lower == option|lower %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="md-label">Risk Level</label>
+              <select name="risk_level" class="md-input">
+                <option value="">All risk levels</option>
+                {% for option in ['Low', 'Medium', 'High'] %}
+                <option value="{{ option }}" {% if filters.risk_level|lower == option|lower %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="md-label">Used In</label>
+              <select name="usage_scope" class="md-input">
+                <option value="">Any usage</option>
+                {% for value, label in usage_scope_options %}
+                <option value="{{ value }}" {% if filters.usage_scope == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="md-label">Accountable</label>
+              <input type="text" name="accountable" value="{{ filters.accountable }}" class="md-input">
+            </div>
+            <div>
+              <label class="md-label">Date Acquired From</label>
+              <input type="date" name="date_from" value="{{ filters.date_from }}" class="md-input">
+            </div>
+            <div>
+              <label class="md-label">Date Acquired To</label>
+              <input type="date" name="date_to" value="{{ filters.date_to }}" class="md-input">
+            </div>
+            <div class="flex items-end gap-2 md:col-span-2 lg:col-span-4">
+              <button type="submit" class="md-btn md-btn-blue"><i data-lucide="search" class="h-4 w-4"></i> Apply Filters</button>
+              <a href="{{ url_for('manage_device_bp.device_page', tab='inventory') }}" class="md-btn md-btn-gray">Reset</a>
+            </div>
+          </form>
+        </div>
+
+        <!-- Inventory table -->
+        <div class="md-card bg-white border border-slate-200 shadow-sm">
+          {% if devices %}
+          <form id="mdBulkForm" method="post" action="">
+            <div class="md-scroll">
+              <table class="md-table min-w-[1500px] w-full text-sm">
+                <thead>
+                  <tr>
+                    <th class="px-3 py-3 text-left"><input type="checkbox" id="mdSelectAll" onclick="mdToggleAll(this)"></th>
+                    <th class="px-3 py-3 text-left">Item Number</th>
+                    <th class="px-3 py-3 text-left">Item Name</th>
+                    <th class="px-3 py-3 text-left">Brand / Model</th>
+                    <th class="px-3 py-3 text-left">Serial No</th>
+                    <th class="px-3 py-3 text-left">Municipal Serial No</th>
+                    <th class="px-3 py-3 text-right">Acquisition Cost</th>
+                    <th class="px-3 py-3 text-left">Date Acquired</th>
+                    <th class="px-3 py-3 text-left">Accountable</th>
+                    <th class="px-3 py-3 text-left">Department</th>
+                    <th class="px-3 py-3 text-left">Status</th>
+                    <th class="px-3 py-3 text-left">Interval</th>
+                    <th class="px-3 py-3 text-left">Risk Level</th>
+                    <th class="px-3 py-3 text-left">Used In</th>
+                    <th class="px-3 py-3 text-left">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="mdTableBody">
+                  {% for device in devices %}
+                  {% set status_key = (device.status or '')|trim|lower %}
+                  <tr class="hover:bg-indigo-50/60 align-top">
+                    <td class="px-3 py-2.5">
+                      <input type="checkbox" name="device_ids" value="{{ device.accession_id }}" class="md-row-checkbox" onchange="mdSyncSelectAll()">
+                    </td>
+                    <td class="px-3 py-2.5 font-semibold text-slate-700">{{ device.accession_id }}</td>
+                    <td class="px-3 py-2.5">
+                      <div class="font-semibold text-slate-900">{{ device.item_name }}</div>
+                      {% if device.device_type %}<div class="text-[11px] text-slate-500">{{ device.device_type }}</div>{% endif %}
+                    </td>
+                    <td class="px-3 py-2.5 text-slate-600">{{ device.brand_model or '—' }}</td>
+                    <td class="px-3 py-2.5 text-slate-600">{{ device.serial_no or '—' }}</td>
+                    <td class="px-3 py-2.5 text-slate-600">{{ device.municipal_serial_no or '—' }}</td>
+                    <td class="px-3 py-2.5 text-right text-slate-700">₱{{ '%.2f'|format(device.acquisition_cost or 0) }}</td>
+                    <td class="px-3 py-2.5 whitespace-nowrap text-slate-600">{{ device.date_acquired or '—' }}</td>
+                    <td class="px-3 py-2.5 text-slate-600">{{ device.accountable or '—' }}</td>
+                    <td class="px-3 py-2.5 text-slate-600">{{ device.department_name or '—' }}</td>
+                    <td class="px-3 py-2.5">
+                      <span class="md-pill
+                        {% if status_key == 'available' %}bg-green-100 text-green-700
+                        {% elif status_key in ['in use','in used','inuse'] %}bg-blue-100 text-blue-700
+                        {% elif status_key in ['damaged','damage','unusable'] %}bg-red-100 text-red-700
+                        {% elif status_key == 'inactive' %}bg-slate-100 text-slate-600
+                        {% else %}bg-amber-100 text-amber-700{% endif %}">
+                        {{ device.status or '—' }}
+                      </span>
+                    </td>
+                    <td class="px-3 py-2.5 whitespace-nowrap text-slate-600">
+                      {% if device.maintenance_interval_days %}
+                        {% set interval_days = device.maintenance_interval_days|int %}
+                        {{ (interval_days / 365)|round|int if interval_days >= 365 else interval_days }} yr
+                      {% else %}—{% endif %}
+                      {% if device.last_checked %}<div class="text-[10px] text-slate-400">checked {{ device.last_checked }}</div>{% endif %}
+                    </td>
+                    <td class="px-3 py-2.5">
+                      <span class="md-pill
+                        {% if device.effective_risk == 'Low' %}bg-green-100 text-green-700
+                        {% elif device.effective_risk == 'Medium' %}bg-amber-100 text-amber-700
+                        {% elif device.effective_risk == 'High' %}bg-red-100 text-red-700
+                        {% else %}bg-slate-100 text-slate-600{% endif %}">
+                        {{ device.effective_risk }}
+                      </span>
+                    </td>
+                    <td class="px-3 py-2.5">
+                      <span class="md-pill
+                        {% if device.used_in.startswith('PC:') %}bg-indigo-100 text-indigo-700
+                        {% elif device.used_in.startswith('Dept:') %}bg-sky-100 text-sky-700
+                        {% else %}bg-slate-100 text-slate-500{% endif %}">
+                        {{ device.used_in }}
+                      </span>
+                    </td>
+                    <td class="px-3 py-2.5">
+                      <div class="flex flex-wrap gap-1">
+                        {% if is_admin == 1 or permissions.get('inventory', {}).get('edit', False) %}
+                        <button type="button" onclick="mdOpenEditModal({{ device.accession_id }})" class="md-btn md-btn-blue !px-2 !py-1 !text-[11px]">
+                          <i data-lucide="pencil" class="h-3 w-3"></i> Edit
+                        </button>
+                        <button type="button" onclick="mdMarkChecked({{ device.accession_id }})" class="md-btn md-btn-green !px-2 !py-1 !text-[11px]">
+                          <i data-lucide="check" class="h-3 w-3"></i> Check
+                        </button>
+                        <button type="button" onclick='mdConfirmArchive({{ device.accession_id }}, {{ (device.item_name or "")|tojson }})' class="md-btn md-btn-red !px-2 !py-1 !text-[11px]">
+                          <i data-lucide="trash-2" class="h-3 w-3"></i> Archive
+                        </button>
+                        {% endif %}
+                        <button type="button" onclick='mdOpenHistory({{ device.accession_id }}, {{ (device.item_name or "")|tojson }})' class="md-btn md-btn-gray !px-2 !py-1 !text-[11px]">
+                          <i data-lucide="clock" class="h-3 w-3"></i> History
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </form>
+
+          <!-- Pagination -->
+          <div class="flex flex-col gap-3 border-t border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p class="text-sm text-slate-600">
+              Showing
+              <span class="font-semibold">{{ ((page - 1) * per_page + 1) if total_items else 0 }}</span>
+              –
+              <span class="font-semibold">{{ [page * per_page, total_items]|min if total_items else 0 }}</span>
+              of <span class="font-semibold">{{ total_items }}</span> devices
+            </p>
+            <div class="flex flex-wrap items-center gap-1">
+              <a href="?{{ inventory_qs }}&page={{ page - 1 }}&tab=inventory"
+                 class="md-btn md-btn-gray {% if page <= 1 %}pointer-events-none opacity-40{% endif %}">Prev</a>
+              {% set start_page = [1, page - 2]|max %}
+              {% set end_page = [total_pages, page + 2]|min %}
+              {% if start_page > 1 %}
+                <a href="?{{ inventory_qs }}&page=1&tab=inventory" class="md-btn md-btn-gray">1</a>
+                {% if start_page > 2 %}<span class="px-1 text-slate-400">…</span>{% endif %}
+              {% endif %}
+              {% for p in range(start_page, end_page + 1) %}
+                <a href="?{{ inventory_qs }}&page={{ p }}&tab=inventory"
+                   class="md-btn {% if p == page %}md-btn-blue{% else %}md-btn-gray{% endif %}">{{ p }}</a>
+              {% endfor %}
+              {% if end_page < total_pages %}
+                {% if end_page < total_pages - 1 %}<span class="px-1 text-slate-400">…</span>{% endif %}
+                <a href="?{{ inventory_qs }}&page={{ total_pages }}&tab=inventory" class="md-btn md-btn-gray">{{ total_pages }}</a>
+              {% endif %}
+              <a href="?{{ inventory_qs }}&page={{ page + 1 }}&tab=inventory"
+                 class="md-btn md-btn-gray {% if page >= total_pages %}pointer-events-none opacity-40{% endif %}">Next</a>
+              <form method="get" action="{{ url_for('manage_device_bp.device_page') }}" class="ml-2 flex items-center gap-1">
+                <input type="hidden" name="tab" value="inventory">
+                <input type="hidden" name="search" value="{{ filters.search }}">
+                <input type="hidden" name="department_id" value="{{ filters.department_id or '' }}">
+                <input type="hidden" name="status" value="{{ filters.status }}">
+                <input type="hidden" name="risk_level" value="{{ filters.risk_level }}">
+                <input type="hidden" name="usage_scope" value="{{ filters.usage_scope }}">
+                <input type="hidden" name="accountable" value="{{ filters.accountable }}">
+                <input type="hidden" name="date_from" value="{{ filters.date_from }}">
+                <input type="hidden" name="date_to" value="{{ filters.date_to }}">
+                <select name="per_page" class="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs" onchange="this.form.submit()">
+                  {% for option in [10, 25, 50, 100] %}
+                  <option value="{{ option }}" {% if per_page == option %}selected{% endif %}>{{ option }} / page</option>
+                  {% endfor %}
+                </select>
+              </form>
+            </div>
+          </div>
+          {% else %}
+          <div class="p-10 text-center">
+            <i data-lucide="hard-drive" class="mx-auto mb-3 h-10 w-10 text-slate-300"></i>
+            <p class="font-semibold text-slate-600">No devices found.</p>
+            <p class="text-sm text-slate-500">Adjust your filters or add a new device.</p>
+          </div>
+          {% endif %}
+        </div>
+      </section>
+
+      <!-- ================= REPORT TAB ================= -->
+      <section id="mdReportSection" class="hidden space-y-4">
+        <div class="md-card bg-white border border-slate-200 shadow-sm p-4 sm:p-5">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 class="flex items-center gap-2 text-lg font-bold text-slate-900">
+                <i data-lucide="clipboard-list" class="h-5 w-5 text-indigo-600"></i>
+                Device Modification Report
+              </h2>
+              <p class="text-sm text-slate-500">Every add, replace, status change, assignment, check and archive is recorded here.</p>
+            </div>
+            <a href="{{ url_for('manage_device_bp.export_report') }}?{{ report_qs }}" class="md-btn md-btn-purple">
+              <i data-lucide="file-spreadsheet" class="h-4 w-4"></i> Export Report
+            </a>
+          </div>
+
+          <form method="get" action="{{ url_for('manage_device_bp.device_page') }}" class="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-5">
+            <input type="hidden" name="tab" value="report">
+            <div>
+              <label class="md-label">Search</label>
+              <input type="text" name="r_search" value="{{ report_filters.search }}" placeholder="Item, serial, user, remarks..." class="md-input">
+            </div>
+            <div>
+              <label class="md-label">Action</label>
+              <select name="r_action" class="md-input">
+                <option value="">All actions</option>
+                {% for action in report_actions %}
+                <option value="{{ action }}" {% if report_filters.action == action %}selected{% endif %}>{{ action.replace('_', ' ')|title }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="md-label">Department</label>
+              <select name="r_department_id" class="md-input">
+                <option value="">All departments</option>
+                {% for dep in departments %}
+                <option value="{{ dep.department_id }}" {% if report_filters.department_id == dep.department_id %}selected{% endif %}>{{ dep.department_name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="md-label">From</label>
+              <input type="date" name="r_date_from" value="{{ report_filters.date_from }}" class="md-input">
+            </div>
+            <div>
+              <label class="md-label">To</label>
+              <input type="date" name="r_date_to" value="{{ report_filters.date_to }}" class="md-input">
+            </div>
+            <div class="flex items-end gap-2 md:col-span-2 lg:col-span-5">
+              <button type="submit" class="md-btn md-btn-blue"><i data-lucide="search" class="h-4 w-4"></i> Apply Filters</button>
+              <a href="{{ url_for('manage_device_bp.device_page', tab='report') }}" class="md-btn md-btn-gray">Reset</a>
+            </div>
+          </form>
+        </div>
+
+        <div class="md-card bg-white border border-slate-200 shadow-sm">
+          {% if report_rows %}
+          <div class="md-scroll">
+            <table class="md-table min-w-[1300px] w-full text-sm">
+              <thead>
+                <tr>
+                  <th class="px-3 py-3 text-left">Date / Time</th>
+                  <th class="px-3 py-3 text-left">Item Number</th>
+                  <th class="px-3 py-3 text-left">Item Name</th>
+                  <th class="px-3 py-3 text-left">Serial No</th>
+                  <th class="px-3 py-3 text-left">Action</th>
+                  <th class="px-3 py-3 text-left">Field</th>
+                  <th class="px-3 py-3 text-left">Old Value</th>
+                  <th class="px-3 py-3 text-left">New Value</th>
+                  <th class="px-3 py-3 text-left">Remarks</th>
+                  <th class="px-3 py-3 text-left">Changed By</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in report_rows %}
+                <tr class="hover:bg-indigo-50/60 align-top">
+                  <td class="px-3 py-2.5 whitespace-nowrap text-slate-600">{{ row.changed_at_display }}</td>
+                  <td class="px-3 py-2.5 font-semibold text-slate-700">{{ row.device_id }}</td>
+                  <td class="px-3 py-2.5 text-slate-800">{{ row.item_name or '—' }}</td>
+                  <td class="px-3 py-2.5 text-slate-600">{{ row.serial_no or '—' }}</td>
+                  <td class="px-3 py-2.5">
+                    <span class="md-report-action
+                      {% if row.action == 'ADDED' %}bg-green-100 text-green-700
+                      {% elif row.action == 'REPLACED' %}bg-amber-100 text-amber-700
+                      {% elif row.action == 'STATUS_CHANGED' %}bg-blue-100 text-blue-700
+                      {% elif row.action == 'ASSIGNED' %}bg-indigo-100 text-indigo-700
+                      {% elif row.action == 'ARCHIVED' %}bg-red-100 text-red-700
+                      {% elif row.action == 'CHECKED' %}bg-emerald-100 text-emerald-700
+                      {% elif row.action == 'IMPORTED' %}bg-violet-100 text-violet-700
+                      {% else %}bg-slate-100 text-slate-600{% endif %}">
+                      {{ row.action.replace('_', ' ')|title }}
+                    </span>
+                  </td>
+                  <td class="px-3 py-2.5 text-slate-600">{{ row.field_name or '—' }}</td>
+                  <td class="px-3 py-2.5 max-w-[220px] break-words text-slate-500">{{ row.old_value if row.old_value not in (None, '') else '—' }}</td>
+                  <td class="px-3 py-2.5 max-w-[220px] break-words font-medium text-slate-700">{{ row.new_value if row.new_value not in (None, '') else '—' }}</td>
+                  <td class="px-3 py-2.5 max-w-[240px] break-words text-slate-500">{{ row.remarks or '—' }}</td>
+                  <td class="px-3 py-2.5 text-slate-700">{{ row.changed_by_name or '—' }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="flex flex-col gap-3 border-t border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p class="text-sm text-slate-600">
+              Showing
+              <span class="font-semibold">{{ ((r_page - 1) * r_per_page + 1) if report_total else 0 }}</span>
+              –
+              <span class="font-semibold">{{ [r_page * r_per_page, report_total]|min if report_total else 0 }}</span>
+              of <span class="font-semibold">{{ report_total }}</span> entries
+            </p>
+            <div class="flex flex-wrap items-center gap-1">
+              <a href="?{{ report_qs }}&r_page={{ r_page - 1 }}&tab=report"
+                 class="md-btn md-btn-gray {% if r_page <= 1 %}pointer-events-none opacity-40{% endif %}">Prev</a>
+              {% set r_start = [1, r_page - 2]|max %}
+              {% set r_end = [report_pages, r_page + 2]|min %}
+              {% if r_start > 1 %}
+                <a href="?{{ report_qs }}&r_page=1&tab=report" class="md-btn md-btn-gray">1</a>
+                {% if r_start > 2 %}<span class="px-1 text-slate-400">…</span>{% endif %}
+              {% endif %}
+              {% for p in range(r_start, r_end + 1) %}
+                <a href="?{{ report_qs }}&r_page={{ p }}&tab=report"
+                   class="md-btn {% if p == r_page %}md-btn-blue{% else %}md-btn-gray{% endif %}">{{ p }}</a>
+              {% endfor %}
+              {% if r_end < report_pages %}
+                {% if r_end < report_pages - 1 %}<span class="px-1 text-slate-400">…</span>{% endif %}
+                <a href="?{{ report_qs }}&r_page={{ report_pages }}&tab=report" class="md-btn md-btn-gray">{{ report_pages }}</a>
+              {% endif %}
+              <a href="?{{ report_qs }}&r_page={{ r_page + 1 }}&tab=report"
+                 class="md-btn md-btn-gray {% if r_page >= report_pages %}pointer-events-none opacity-40{% endif %}">Next</a>
+            </div>
+          </div>
+          {% else %}
+          <div class="p-10 text-center">
+            <i data-lucide="clipboard-x" class="mx-auto mb-3 h-10 w-10 text-slate-300"></i>
+            <p class="font-semibold text-slate-600">No modification records yet.</p>
+            <p class="text-sm text-slate-500">Changes made to devices will appear here.</p>
+          </div>
+          {% endif %}
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ================= ADD / EDIT MODAL ================= -->
+  <div id="mdDeviceModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4 md-modal-backdrop">
+    <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+      <div class="flex items-center justify-between bg-gradient-to-r from-indigo-600 to-blue-600 px-5 py-4 text-white">
+        <h3 id="mdModalTitle" class="flex items-center gap-2 text-lg font-bold">
+          <i data-lucide="plus-circle" class="h-5 w-5"></i> Add Device
+        </h3>
+        <button type="button" onclick="mdCloseModal()" class="rounded-full bg-white/15 p-1.5 hover:bg-white/25">
+          <i data-lucide="x" class="h-4 w-4"></i>
+        </button>
+      </div>
+
+      <form id="mdDeviceForm" class="space-y-4 p-5" method="post" action="{{ url_for('manage_device_bp.add_device') }}">
+        <input type="hidden" name="accession_id" id="md_accession_id">
+        <div id="mdFormError" class="hidden rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700"></div>
+
+        <div class="grid gap-4 md:grid-cols-2">
+          <div>
+            <label class="md-label">Item Name *</label>
+            <input type="text" name="item_name" id="md_item_name" required list="mdItemNameOptions" class="md-input">
+            <datalist id="mdItemNameOptions">
+              <option value="Monitor"></option>
+              <option value="Keyboard"></option>
+              <option value="Mouse"></option>
+              <option value="Printer"></option>
+              <option value="Scanner"></option>
+              <option value="Projector"></option>
+              <option value="TV"></option>
+              <option value="UPS"></option>
+              <option value="AVR"></option>
+              <option value="Router"></option>
+              <option value="Switch"></option>
+              <option value="Network Card"></option>
+              <option value="RAM"></option>
+              <option value="Storage (SSD)"></option>
+              <option value="Storage (HDD)"></option>
+              <option value="Graphics Card (GPU)"></option>
+              <option value="Power Supply (PSU)"></option>
+              <option value="Motherboard"></option>
+              <option value="Processor (CPU)"></option>
+            </datalist>
+          </div>
+          <div>
+            <label class="md-label">Brand / Model</label>
+            <input type="text" name="brand_model" id="md_brand_model" class="md-input">
+          </div>
+          <div>
+            <label class="md-label">Serial No</label>
+            <input type="text" name="serial_no" id="md_serial_no" class="md-input" placeholder="Leave blank to auto-generate">
+          </div>
+          <div>
+            <label class="md-label">Municipal Serial No</label>
+            <input type="text" name="municipal_serial_no" id="md_municipal_serial_no" class="md-input" placeholder="Leave blank to auto-generate">
+          </div>
+          <div>
+            <label class="md-label">Item Type</label>
+            <select name="device_type" id="md_device_type" class="md-input">
+              <option value="Device">Device</option>
+              <option value="PC">PC</option>
+              <option value="Consumable">Consumable</option>
+            </select>
+          </div>
+          <div>
+            <label class="md-label">Acquisition Cost (₱)</label>
+            <input type="number" step="0.01" min="0" name="acquisition_cost" id="md_acquisition_cost" class="md-input">
+          </div>
+          <div>
+            <label class="md-label">Date Acquired</label>
+            <input type="date" name="date_acquired" id="md_date_acquired" class="md-input">
+          </div>
+          <div>
+            <label class="md-label">Accountable Person</label>
+            <input type="text" name="accountable" id="md_accountable" class="md-input">
+          </div>
+          <div>
+            <label class="md-label">Department</label>
+            <select name="department_id" id="md_department_id" class="md-input">
+              <option value="">Select department</option>
+              {% for dep in departments %}
+              <option value="{{ dep.department_id }}">{{ dep.department_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="md-label">Status</label>
+            <select name="status" id="md_status" class="md-input">
+              {% for option in status_options %}
+              <option value="{{ option }}">{{ option }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="md-label">Maintenance Interval (Years)</label>
+            <input type="number" min="1" max="50" name="maintenance_interval_years" id="md_interval_years" value="1" class="md-input">
+          </div>
+          <div>
+            <label class="md-label">Used In</label>
+            <select name="usage_scope" id="md_usage_scope" class="md-input" onchange="mdOnScopeChange()">
+              {% for value, label in usage_scope_options %}
+              <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div id="mdPcSelectWrap" class="md-scope-pc md:col-span-2">
+            <label class="md-label">Assigned PC</label>
+            <select name="used_on_pcid" id="md_used_on_pcid" class="md-input">
+              <option value="">Select PC</option>
+              {% for pc in pcs %}
+              <option value="{{ pc.pcid }}">{{ pc.pcname }}{% if pc.department_name %} — {{ pc.department_name }}{% endif %}</option>
+              {% endfor %}
+            </select>
+            <p class="mt-1 text-xs text-slate-500">Choose the PC this device is installed in or attached to.</p>
+          </div>
+        </div>
+
+        <div class="flex justify-end gap-2 border-t border-slate-200 pt-4">
+          <button type="button" onclick="mdCloseModal()" class="md-btn md-btn-gray">Cancel</button>
+          <button type="submit" id="mdSubmitBtn" class="md-btn md-btn-blue">
+            <i data-lucide="save" class="h-4 w-4"></i> Add Device
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= HISTORY MODAL ================= -->
+  <div id="mdHistoryModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4 md-modal-backdrop">
+    <div class="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+      <div class="flex items-center justify-between bg-slate-800 px-5 py-4 text-white">
+        <h3 class="flex items-center gap-2 text-lg font-bold"><i data-lucide="history" class="h-5 w-5"></i> Device History — <span id="mdHistoryTitle"></span></h3>
+        <button type="button" onclick="mdCloseHistory()" class="rounded-full bg-white/15 p-1.5 hover:bg-white/25">
+          <i data-lucide="x" class="h-4 w-4"></i>
+        </button>
+      </div>
+      <div id="mdHistoryBody" class="p-5 text-sm"></div>
+    </div>
+  </div>
+
+  <!-- ================= ARCHIVE CONFIRM ================= -->
+  <div id="mdArchiveModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4 md-modal-backdrop">
+    <div class="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl">
+      <div class="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-red-100 text-red-600">
+        <i data-lucide="trash-2" class="h-7 w-7"></i>
+      </div>
+      <h3 class="text-lg font-bold text-slate-900">Archive Device</h3>
+      <p class="mt-1 text-sm text-slate-500">Archive <span id="mdArchiveName" class="font-semibold text-slate-700"></span>? It will be removed from the device list but its history is kept.</p>
+      <div class="mt-5 flex justify-center gap-2">
+        <button type="button" onclick="mdCloseArchive()" class="md-btn md-btn-gray">Cancel</button>
+        <form id="mdArchiveForm" method="post" action="">
+          <button type="submit" class="md-btn md-btn-red">Archive</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.MD_URLS = {
+      get: "{{ url_for('manage_device_bp.get_device_json', device_id=0) }}".replace('/0', ''),
+      history: "{{ url_for('manage_device_bp.device_history', device_id=0) }}".replace('/0', ''),
+      add: "{{ url_for('manage_device_bp.add_device') }}",
+      update: "{{ url_for('manage_device_bp.update_device') }}",
+      check: "{{ url_for('manage_device_bp.mark_checked', device_id=0) }}".replace('/0', ''),
+      archive: "{{ url_for('manage_device_bp.archive_device', device_id=0) }}".replace('/0', ''),
+      export: "{{ url_for('manage_device_bp.export_devices') }}",
+      import: "{{ url_for('manage_device_bp.import_devices') }}"
+    };
+    window.MD_ACTIVE_TAB = "{{ active_tab }}";
+    window.MD_CAN_EDIT = {{ 'true' if (is_admin == 1 or permissions.get('inventory', {}).get('edit', False)) else 'false' }};
+  </script>
+  <script src="{{ url_for('static', filename='js/manage_device_section.js') }}?v=20261101-1"></script>
+</body>
+</html>
