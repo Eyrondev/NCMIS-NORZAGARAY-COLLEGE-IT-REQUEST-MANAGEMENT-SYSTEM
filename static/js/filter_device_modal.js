@@ -4,7 +4,7 @@ async function openDeviceFilterModalFromFile() {
 
   if (!document.getElementById("filterDeviceModal")) {
     try {
-      const res = await fetch("/device-filter-modal");
+      const res = await fetch("/manage_inventory/device-filter-modal");
       if (!res.ok) throw new Error(`Failed to load modal: ${res.status}`);
 
       const html = await res.text();

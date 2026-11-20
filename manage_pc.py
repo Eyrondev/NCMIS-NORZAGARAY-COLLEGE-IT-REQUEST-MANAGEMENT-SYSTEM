@@ -9,9 +9,51 @@ from datetime import date
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from utils.inventory_audit import log_inventory_action
+from utils.maintenance_audit import (
+    current_technician,
+    ensure_maintenance_history_schema,
+    is_repair_transition,
+    log_maintenance_event,
+)
 from notification import add_notification
 
 manage_pc_bp = Blueprint('manage_pc_bp', __name__)
+
+
+# Parts that can be replaced from the PC inventory screen. The keyword list is
+# used to match available inventory rows to the selected part column.
+PC_PART_DEFINITIONS = {
+    'monitor': {'label': 'Monitor', 'keywords': ['monitor', 'display']},
+    'motherboard': {'label': 'Motherboard', 'keywords': ['motherboard', 'mainboard']},
+    'ram': {'label': 'RAM', 'keywords': ['ram', 'memory']},
+    'storage': {'label': 'Storage', 'keywords': ['storage', 'ssd', 'hdd', 'hard drive', 'hard disk', 'nvme']},
+    'gpu': {'label': 'GPU', 'keywords': ['gpu', 'graphics', 'video card']},
+    'psu': {'label': 'PSU', 'keywords': ['psu', 'power supply']},
+    'casing': {'label': 'Casing', 'keywords': ['casing', 'chassis']},
+    'mouse': {'label': 'Mouse', 'keywords': ['mouse']},
+    'keyboard': {'label': 'Keyboard', 'keywords': ['keyboard']},
+    'other_parts': {'label': 'Other Parts', 'keywords': None},
+}
+PC_PART_ALLOWED = tuple(PC_PART_DEFINITIONS.keys())
+
+# Post-removal dispositions offered by the Replace Part dialog.
+REMOVED_PART_STATUS_OPTIONS = ('Available', 'Needs Fixing', 'Defective', 'For Disposal')
+
+# Inventory states that mean "this physical unit is already spoken for".
+_ASSIGNED_DEVICE_STATUSES = (
+    'in use', 'in used', 'in-used', 'inuse', 'assigned', 'used',
+    'damaged', 'damage', 'unusable', 'defective', 'for disposal',
+    'needs fixing', 'surrendered', 'archived', 'inactive',
+)
+
+
+class _ReplacementError(Exception):
+    """Raised for validation failures in the replacement workflow."""
+
+    def __init__(self, message, status_code=400):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
 
 
 def _existing_pc_part_columns(cur):
@@ -177,16 +219,26 @@ def _apply_returned_status(cur, accession_id, old_status, old_quantity, new_stat
     return detail
 
 
-def _resolve_replaced_device_rows(cur, token):
+def _resolve_replaced_device_rows(cur, token, prefer_pcid=None, exclude_accession_id=None):
     """Return device rows referenced by a PC part token.
 
     Handles accession ids, exact serials, catalog labels (``Item — Brand``)
-    and finally partial name/brand matches.  Label/partial matches pick the
-    most likely assigned row first (IN USE, then other, then damaged).
+    and finally partial name/brand matches.  When the parent PC is known, a
+    device already linked through ``used_on_pcid`` wins so same-model units do
+    not get mixed up.  ``exclude_accession_id`` keeps the incoming replacement
+    out of the "removed part" lookup.
     """
     token = str(token or '').strip()
     if not token:
         return []
+
+    def _allowed(row):
+        if not row:
+            return False
+        aid = row.get('accession_id') if isinstance(row, dict) else row[0]
+        if exclude_accession_id is not None and str(aid) == str(exclude_accession_id):
+            return False
+        return True
 
     try:
         aid = int(token)
@@ -195,47 +247,61 @@ def _resolve_replaced_device_rows(cur, token):
 
     if aid is not None:
         cur.execute(
-            "SELECT accession_id, status, quantity FROM devices_full WHERE accession_id = %s",
+            "SELECT accession_id, status, quantity, used_on_pcid FROM devices_full "
+            "WHERE accession_id = %s",
             (aid,),
         )
         row = cur.fetchone()
-        return [row] if row else []
+        return [row] if _allowed(row) else []
 
     cur.execute(
-        "SELECT accession_id, status, quantity FROM devices_full "
+        "SELECT accession_id, status, quantity, used_on_pcid FROM devices_full "
         "WHERE serial_no = %s OR municipal_serial_no = %s",
         (token, token),
     )
-    rows = cur.fetchall()
+    rows = [row for row in (cur.fetchall() or []) if _allowed(row)]
     if rows:
         return rows
 
     item_name, brand_model = _split_part_label(token)
     if item_name and brand_model:
+        # Prefer the unit that is explicitly linked to this PC.
+        if prefer_pcid:
+            cur.execute(
+                "SELECT accession_id, status, quantity, used_on_pcid FROM devices_full "
+                "WHERE used_on_pcid = %s "
+                "AND LOWER(TRIM(item_name)) = %s "
+                "AND LOWER(TRIM(COALESCE(brand_model, ''))) = %s "
+                "ORDER BY accession_id LIMIT 1",
+                (prefer_pcid, item_name.lower(), brand_model.lower()),
+            )
+            row = cur.fetchone()
+            if _allowed(row):
+                return [row]
+
         cur.execute(
-            "SELECT accession_id, status, quantity FROM devices_full "
+            "SELECT accession_id, status, quantity, used_on_pcid FROM devices_full "
             "WHERE LOWER(TRIM(item_name)) = %s "
             "AND LOWER(TRIM(COALESCE(brand_model, ''))) = %s "
             "ORDER BY CASE WHEN LOWER(COALESCE(status, '')) = 'in use' THEN 0 "
             "WHEN LOWER(COALESCE(status, '')) LIKE 'damaged%%' THEN 2 ELSE 1 END, "
-            "accession_id LIMIT 1",
+            "accession_id LIMIT 5",
             (item_name.lower(), brand_model.lower()),
         )
-        row = cur.fetchone()
-        if row:
-            return [row]
+        rows = [row for row in (cur.fetchall() or []) if _allowed(row)]
+        if rows:
+            return rows
 
     like = f"%{token.lower()}%"
     cur.execute(
-        "SELECT accession_id, status, quantity FROM devices_full "
+        "SELECT accession_id, status, quantity, used_on_pcid FROM devices_full "
         "WHERE LOWER(item_name) LIKE %s OR LOWER(COALESCE(brand_model, '')) LIKE %s "
         "ORDER BY CASE WHEN LOWER(COALESCE(status, '')) = 'in use' THEN 0 "
         "WHEN LOWER(COALESCE(status, '')) LIKE 'damaged%%' THEN 2 ELSE 1 END, "
-        "accession_id LIMIT 1",
+        "accession_id LIMIT 5",
         (like, like),
     )
-    row = cur.fetchone()
-    return [row] if row else []
+    return [row for row in (cur.fetchall() or []) if _allowed(row)]
 
 
 def _return_replaced_part(cur, value, mark_damaged=False, exclude_pcid=None, performed_by=None, collected=None):
@@ -289,6 +355,7 @@ def _ensure_part_replacement_table(cur):
             new_value TEXT,
             removed_status VARCHAR(32) DEFAULT NULL,
             accession_id INT DEFAULT NULL,
+            new_accession_id INT DEFAULT NULL,
             performed_by INT DEFAULT NULL,
             remarks TEXT DEFAULT NULL,
             performed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -296,6 +363,539 @@ def _ensure_part_replacement_table(cur):
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
         """
     )
+
+    # Older installations already have the report table; add the column that
+    # records which inventory unit was installed without recreating the table.
+    try:
+        cur.execute("SHOW COLUMNS FROM pc_part_replacements LIKE 'new_accession_id'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE pc_part_replacements ADD COLUMN new_accession_id INT DEFAULT NULL")
+    except Exception as exc:
+        try:
+            print(f"[replace_pc_part] Could not ensure new_accession_id column: {exc}")
+        except Exception:
+            pass
+
+
+def _part_display_label(item_name, brand_model):
+    """Return the label stored in the PC part column for one inventory unit."""
+    name = str(item_name or '').strip()
+    brand = str(brand_model or '').strip()
+    if name and brand:
+        return f"{name} — {brand}"
+    return name or brand
+
+
+def _device_matches_part(row, part):
+    """True when an inventory row is classified as the selected PC part."""
+    definition = PC_PART_DEFINITIONS.get(part)
+    keywords = definition.get('keywords') if definition else None
+    if not keywords:
+        return True
+    haystack = ' '.join(
+        str(row.get(field) or '')
+        for field in ('item_name', 'brand_model', 'device_type')
+    ).lower()
+    return any(keyword.lower() in haystack for keyword in keywords)
+
+
+def _device_referenced_by_another_pc(cur, accession_id, serial_no=None, exclude_pcid=None):
+    """True when another active PC already references this inventory unit."""
+    parts = _existing_pc_part_columns(cur)
+    if not parts:
+        return False
+
+    tokens = []
+    for token in (accession_id, serial_no):
+        token = str(token or '').strip()
+        if token and token not in tokens:
+            tokens.append(token)
+    if not tokens:
+        return False
+
+    unit_clauses = []
+    params = []
+    for part in parts:
+        for token in tokens:
+            unit_clauses.append(
+                f"(`{part}` = %s OR FIND_IN_SET(%s, REPLACE(COALESCE(`{part}`, ''), ' ', '')) > 0)"
+            )
+            params.extend([token, token])
+
+    sql = (
+        "SELECT COUNT(*) AS cnt FROM pcinfofull "
+        "WHERE pcid != %s AND COALESCE(is_archived, 0) = 0 "
+        "AND (" + " OR ".join(unit_clauses) + ")"
+    )
+    cur.execute(sql, [exclude_pcid or 0] + params)
+    row = cur.fetchone()
+    cnt = row.get('cnt') if isinstance(row, dict) else (row[0] if row else 0)
+    return int(cnt or 0) > 0
+
+
+def _apply_removed_part_status(cur, pcid, old_value, new_status, performed_by=None,
+                               exclude_accession_id=None):
+    """Apply the chosen disposition to the removed part's inventory row(s)."""
+    details = []
+    for token in _parse_tokens(old_value):
+        token_is_unique = _token_is_unique_device(cur, token)
+        for row in _resolve_replaced_device_rows(
+            cur,
+            token,
+            prefer_pcid=pcid,
+            exclude_accession_id=exclude_accession_id,
+        ):
+            aid = row.get('accession_id') if isinstance(row, dict) else row[0]
+            old_status = row.get('status') if isinstance(row, dict) else row[1]
+            old_qty = row.get('quantity') if isinstance(row, dict) else row[2]
+            used_on_pcid = row.get('used_on_pcid') if isinstance(row, dict) else None
+
+            if exclude_accession_id and str(aid) == str(exclude_accession_id):
+                continue
+            # A shared display label must never pull a unit that is explicitly
+            # assigned to a different PC into this replacement.
+            if (
+                not token_is_unique
+                and used_on_pcid
+                and str(used_on_pcid) != str(pcid)
+            ):
+                try:
+                    print(f"[removed_part] accession_id={aid} is assigned to PC {used_on_pcid}; skipping")
+                except Exception:
+                    pass
+                continue
+            if token_is_unique and _is_token_referenced_elsewhere(cur, token, pcid):
+                try:
+                    print(f"[removed_part] accession_id={aid} still referenced elsewhere; skipping")
+                except Exception:
+                    pass
+                continue
+
+            try:
+                quantity = int(old_qty) if old_qty is not None else 0
+            except (TypeError, ValueError):
+                quantity = 0
+
+            # A tracked unit is normally stored with quantity 0/1. Stock rows
+            # (quantity > 1) were never tied to this PC, so leave them alone.
+            if quantity > 1 and not used_on_pcid:
+                continue
+
+            new_quantity = 1 if quantity < 1 else quantity
+            if new_quantity != old_qty:
+                cur.execute(
+                    "UPDATE devices_full SET quantity = %s WHERE accession_id = %s",
+                    (new_quantity, aid),
+                )
+                try:
+                    log_inventory_action(
+                        'DEVICE', aid, 'UPDATE', 'quantity', old_qty, new_quantity, performed_by
+                    )
+                except Exception:
+                    pass
+
+            if str(old_status or '').strip() != new_status:
+                cur.execute(
+                    "UPDATE devices_full SET status = %s WHERE accession_id = %s",
+                    (new_status, aid),
+                )
+                try:
+                    log_inventory_action(
+                        'DEVICE', aid, 'UPDATE', 'status', old_status, new_status, performed_by
+                    )
+                except Exception:
+                    pass
+
+            # The unit is no longer installed in the PC even when the chosen
+            # disposition is "For Disposal" or "Defective".
+            try:
+                cur.execute(
+                    "UPDATE devices_full "
+                    "SET used_on_pcid = NULL, usage_scope = 'UNASSIGNED' "
+                    "WHERE accession_id = %s",
+                    (aid,),
+                )
+            except Exception:
+                # Older schemas may not have these columns; status/quantity
+                # updates above are still valid.
+                pass
+
+            details.append({
+                'accession_id': aid,
+                'token': token,
+                'old_status': old_status,
+                'new_status': new_status,
+                'quantity': new_quantity,
+            })
+            break  # one physical unit per token
+
+    return details
+
+
+def _claim_replacement_device(cur, accession_id, pcid, performed_by=None):
+    """Lock and validate one available inventory unit for assignment."""
+    cur.execute(
+        "SELECT accession_id, item_name, brand_model, serial_no, municipal_serial_no, "
+        "quantity, device_type, status, is_archived, used_on_pcid, usage_scope "
+        "FROM devices_full WHERE accession_id = %s FOR UPDATE",
+        (accession_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise _ReplacementError('The selected replacement item was not found.', 404)
+
+    serial_no = row.get('serial_no')
+    status_key = str(row.get('status') or '').strip().lower()
+    used_on_pcid = row.get('used_on_pcid')
+    usage_scope = str(row.get('usage_scope') or '').strip().upper()
+
+    if int(row.get('is_archived') or 0) == 1:
+        raise _ReplacementError('The selected item is archived and cannot be assigned.', 409)
+
+    if not used_on_pcid and usage_scope not in ('', 'UNASSIGNED'):
+        raise _ReplacementError(
+            'That inventory item is already assigned elsewhere. Choose a different unit.', 409
+        )
+
+    if used_on_pcid and int(used_on_pcid) == int(pcid):
+        raise _ReplacementError(
+            'That inventory item is already assigned to this PC. Choose a different unit.', 409
+        )
+
+    if used_on_pcid:
+        raise _ReplacementError(
+            'That inventory item is already assigned to another PC. Choose a different unit.', 409
+        )
+
+    if status_key in _ASSIGNED_DEVICE_STATUSES and status_key != 'available':
+        raise _ReplacementError(
+            f'That inventory item is not available (current status: {row.get("status") or "unknown"}).',
+            409,
+        )
+
+    try:
+        quantity = int(row.get('quantity') if row.get('quantity') is not None else 1)
+    except (TypeError, ValueError):
+        quantity = 1
+
+    if quantity < 1:
+        raise _ReplacementError('That inventory item has no available stock.', 409)
+    if quantity > 1:
+        raise _ReplacementError(
+            'That inventory row contains more than one unit. Add individually tracked items '
+            'before assigning it to a PC.',
+            409,
+        )
+
+    if _device_referenced_by_another_pc(cur, accession_id, serial_no, exclude_pcid=pcid):
+        raise _ReplacementError(
+            'That inventory item is already linked to another PC. Choose a different unit.', 409
+        )
+
+    old_status = row.get('status')
+    cur.execute(
+        "UPDATE devices_full "
+        "SET status = 'IN USE', quantity = 0, used_on_pcid = %s, usage_scope = 'PC' "
+        "WHERE accession_id = %s",
+        (pcid, accession_id),
+    )
+    try:
+        log_inventory_action(
+            'DEVICE', accession_id, 'UPDATE', 'status', old_status, 'IN USE', performed_by
+        )
+        log_inventory_action(
+            'DEVICE', accession_id, 'UPDATE', 'quantity', quantity, 0, performed_by
+        )
+    except Exception:
+        pass
+
+    row['status'] = 'IN USE'
+    row['quantity'] = 0
+    row['used_on_pcid'] = pcid
+    row['usage_scope'] = 'PC'
+    return row
+
+
+def _available_part_rows(cur, part, pcid=None):
+    """Return available, individually tracked inventory units for one part."""
+    definition = PC_PART_DEFINITIONS.get(part)
+    if not definition:
+        raise _ReplacementError(f'Unknown part: {part}')
+
+    where = [
+        "COALESCE(df.is_archived, 0) = 0",
+        "LOWER(TRIM(COALESCE(df.status, ''))) IN ('available', '')",
+        "COALESCE(df.used_on_pcid, 0) = 0",
+        "UPPER(TRIM(COALESCE(df.usage_scope, 'UNASSIGNED'))) IN ('', 'UNASSIGNED')",
+        "COALESCE(df.quantity, 1) >= 1",
+        "COALESCE(df.quantity, 1) <= 1",
+        "LOWER(TRIM(COALESCE(df.device_type, ''))) NOT IN ('consumable')",
+        "TRIM(COALESCE(df.device_type, '')) NOT REGEXP '^[0-9]+$'",
+    ]
+    params = []
+
+    keywords = definition.get('keywords')
+    if keywords:
+        keyword_clauses = []
+        for keyword in keywords:
+            keyword_clauses.append(
+                "(LOWER(COALESCE(df.item_name, '')) LIKE %s "
+                "OR LOWER(COALESCE(df.brand_model, '')) LIKE %s "
+                "OR LOWER(COALESCE(df.device_type, '')) LIKE %s)"
+            )
+            like = f"%{keyword.lower()}%"
+            params.extend([like, like, like])
+        where.append("(" + " OR ".join(keyword_clauses) + ")")
+
+    sql = (
+        "SELECT df.accession_id, df.item_name, df.brand_model, df.serial_no, "
+        "df.municipal_serial_no, df.quantity, df.device_type, df.status, "
+        "df.acquisition_cost, df.date_acquired "
+        "FROM devices_full df "
+        "WHERE " + " AND ".join(where) + " "
+        "ORDER BY df.item_name, df.brand_model, df.accession_id "
+        "LIMIT 200"
+    )
+    cur.execute(sql, params)
+    rows = cur.fetchall() or []
+
+    results = []
+    for row in rows:
+        label = _part_display_label(row.get('item_name'), row.get('brand_model'))
+        results.append({
+            'accession_id': row.get('accession_id'),
+            'item_name': row.get('item_name'),
+            'brand_model': row.get('brand_model') or '',
+            'label': label,
+            'serial_no': row.get('serial_no') or '',
+            'municipal_serial_no': row.get('municipal_serial_no') or '',
+            'quantity': 1,
+            'device_type': row.get('device_type') or '',
+            'status': row.get('status') or 'Available',
+            'acquisition_cost': float(row.get('acquisition_cost') or 0),
+            'date_acquired': str(row.get('date_acquired') or ''),
+        })
+    return results
+
+
+def _replace_pc_part_from_inventory(data):
+    """Replace one PC part with an inventory unit and update both sides atomically."""
+    if 'user' not in session:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    part = str(data.get('part') or '').strip().lower()
+    if part not in PC_PART_DEFINITIONS:
+        return jsonify({"success": False, "error": "Invalid part selected"}), 400
+
+    try:
+        pcid = int(data.get('pcid'))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Invalid PC selected"}), 400
+
+    try:
+        replacement_accession_id = int(data.get('replacement_accession_id'))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Choose a replacement item from inventory"}), 400
+
+    removed_status = str(data.get('removed_status') or 'Available').strip()
+    if removed_status not in REMOVED_PART_STATUS_OPTIONS:
+        return jsonify({"success": False, "error": "Invalid status for the removed part"}), 400
+
+    remarks = str(data.get('remarks') or '').strip() or None
+    performed_by = None
+    try:
+        performed_by = session.get('user', {}).get('user_id')
+    except Exception:
+        performed_by = None
+
+    conn = get_db_connection()
+    try:
+        # DDL (CREATE/ALTER/TRIGGER) commits implicitly, so prepare the audit
+        # schema before the replacement transaction starts.
+        try:
+            ensure_maintenance_history_schema(conn)
+        except Exception as schema_error:
+            print(f"[replace_pc_part] maintenance schema error: {schema_error}")
+
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            # DDL (CREATE/ALTER) commits implicitly, so run it before changes.
+            try:
+                _ensure_part_replacement_table(cur)
+            except Exception as table_error:
+                try:
+                    print(f"[replace_pc_part] Could not ensure report table: {table_error}")
+                except Exception:
+                    pass
+
+            existing_parts = _existing_pc_part_columns(cur)
+            if part not in existing_parts:
+                if part not in PC_PART_ALLOWED:
+                    return jsonify({"success": False, "error": f"Part not supported: {part}"}), 400
+                try:
+                    cur.execute(f"ALTER TABLE pcinfofull ADD COLUMN `{part}` TEXT")
+                    existing_parts = _existing_pc_part_columns(cur)
+                except Exception as alter_error:
+                    try:
+                        print(f"[replace_pc_part] Could not add column `{part}`: {alter_error}")
+                    except Exception:
+                        pass
+
+            if part not in existing_parts:
+                return jsonify({
+                    "success": False,
+                    "error": f"The current database schema cannot store a replacement for {part}."
+                }), 400
+
+            select_cols = ', '.join(existing_parts)
+            cur.execute(
+                f"SELECT pcid, pcname, serial_no, status, {select_cols} "
+                "FROM pcinfofull WHERE pcid = %s AND COALESCE(is_archived, 0) = 0 FOR UPDATE",
+                (pcid,),
+            )
+            pc_row = cur.fetchone()
+            if not pc_row:
+                return jsonify({"success": False, "error": "PC not found"}), 404
+
+            old_value = pc_row.get(part)
+            old_tokens = _parse_tokens(old_value)
+
+            # Lock and validate the unit first so duplicate assignments get a
+            # precise message instead of a generic "not available" response.
+            replacement = _claim_replacement_device(
+                cur, replacement_accession_id, pcid, performed_by
+            )
+            if not _device_matches_part(replacement, part):
+                raise _ReplacementError(
+                    'The selected inventory item is not categorized as this part. Choose a matching item.',
+                    409,
+                )
+
+            new_value = replacement.get('label') or _part_display_label(
+                replacement.get('item_name'), replacement.get('brand_model')
+            )
+            if not new_value:
+                raise _ReplacementError('The selected replacement item has no display name.')
+
+            # Apply the removed part's disposition to the old inventory unit(s).
+            removed_details = _apply_removed_part_status(
+                cur,
+                pcid,
+                old_value,
+                removed_status,
+                performed_by,
+                exclude_accession_id=replacement_accession_id,
+            )
+
+            # Update the PC part column only after the replacement is locked in.
+            cur.execute(
+                f"UPDATE pcinfofull SET `{part}` = %s WHERE pcid = %s",
+                (new_value, pcid),
+            )
+            try:
+                log_inventory_action('PC', pcid, 'UPDATE', part, old_value, new_value, performed_by)
+            except Exception:
+                pass
+
+            # Record the replacement for the per-PC history page.
+            removed_accession_id = removed_details[0]['accession_id'] if removed_details else None
+            try:
+                cur.execute(
+                    "INSERT INTO pc_part_replacements "
+                    "(pcid, part, old_value, new_value, removed_status, accession_id, "
+                    "new_accession_id, performed_by, remarks) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        pcid,
+                        part,
+                        old_value,
+                        new_value,
+                        removed_status,
+                        removed_accession_id,
+                        replacement_accession_id,
+                        performed_by,
+                        remarks,
+                    ),
+                )
+            except Exception as report_error:
+                try:
+                    print(f"[replace_pc_part] Could not record replacement history: {report_error}")
+                except Exception:
+                    pass
+
+            # Section 4: every replacement also writes one immutable
+            # maintenance-history record with the full part/status detail.
+            technician = current_technician()
+            removed_status_note = f"Removed part recorded as {removed_status}."
+            if not removed_details:
+                removed_status_note += " No linked inventory record was found."
+            history_remarks = ' '.join(
+                part for part in (remarks, removed_status_note) if part
+            ) or removed_status_note
+            old_part_status = (
+                (removed_details[0].get('old_status') if removed_details else None)
+                or 'IN USE'
+            )
+            log_maintenance_event(
+                cur,
+                asset_type='PC',
+                asset_id=pcid,
+                pcid=pcid,
+                action='Part Replacement',
+                maintenance_type='Part Replacement',
+                replaced_part=PC_PART_DEFINITIONS[part]['label'],
+                previous_part=old_value or '—',
+                new_part=new_value,
+                previous_part_status=removed_status,
+                new_part_status='IN USE',
+                old_status=old_part_status,
+                new_status='IN USE',
+                computer_name=pc_row.get('pcname'),
+                asset_serial=pc_row.get('serial_no'),
+                technician=technician,
+                performed_by=technician,
+                remarks=history_remarks,
+            )
+
+            conn.commit()
+
+        message = f"{PC_PART_DEFINITIONS[part]['label']} replaced successfully."
+        if old_tokens and not removed_details:
+            message += " The old part was not linked to an inventory record, so only the new part was updated."
+
+        return jsonify({
+            "success": True,
+            "message": message,
+            "part": part,
+            "part_label": PC_PART_DEFINITIONS[part]['label'],
+            "pcid": pcid,
+            "new_value": new_value,
+            "replacement": {
+                "accession_id": replacement_accession_id,
+                "label": new_value,
+                "serial_no": replacement.get('serial_no'),
+                "status": 'IN USE',
+                "quantity": 0,
+            },
+            "removed": {
+                "old_value": old_value,
+                "status": removed_status,
+                "tracked": bool(removed_details),
+                "items": removed_details,
+            },
+        })
+
+    except _ReplacementError as exc:
+        conn.rollback()
+        return jsonify({"success": False, "error": exc.message}), exc.status_code
+    except Exception as exc:
+        conn.rollback()
+        try:
+            print(f"[replace_pc_part] inventory replacement failed: {exc}")
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": "Could not complete the replacement."}), 500
+    finally:
+        conn.close()
 
 
 def _mark_device_values_in_use(cur, value, performed_by=None):
@@ -665,7 +1265,6 @@ def delete_pc(pcid):
                         pass
 
             conn.commit()
-            print(f"PC with ID {pcid} archived (soft deleted).")
         if is_ajax:
             return jsonify(success=True, message="PC archived successfully.")
         flash("PC archived successfully.", "success")
@@ -1055,6 +1654,12 @@ def update_pcinfofull():
     status_param = (data.get('status') or '').strip()
 
     try:
+        # Prepare the immutable audit schema before the write transaction.
+        try:
+            ensure_maintenance_history_schema(conn)
+        except Exception as schema_error:
+            print(f"[update_pc] maintenance schema error: {schema_error}")
+
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
 
             # 🔹 1. Duplicate check (require at least one identifier)
@@ -1212,6 +1817,81 @@ def update_pcinfofull():
                 except Exception:
                     pass
 
+            # Section 4: log repairs, status changes, and part replacements made
+            # through the PC edit form.  The maintenance record is immutable.
+            technician = current_technician()
+            old_status_value = old_pc.get('status')
+            pcid_value = data.get('pcid')
+            if is_repair_transition(old_status_value, status_param):
+                log_maintenance_event(
+                    cur,
+                    asset_type='PC',
+                    asset_id=pcid_value,
+                    pcid=pcid_value,
+                    action='Repair Completed',
+                    maintenance_type='Repair',
+                    old_status=old_status_value,
+                    new_status=status_param,
+                    computer_name=data.get('pcname') or old_pc.get('pcname'),
+                    asset_serial=serial or old_pc.get('serial_no'),
+                    technician=technician,
+                    performed_by=technician,
+                    remarks=(
+                        f"Repair completed: status changed from "
+                        f"{old_status_value or '—'} to {status_param or '—'}."
+                    ),
+                )
+            elif str(old_status_value or '').strip().lower() != str(status_param or '').strip().lower():
+                log_maintenance_event(
+                    cur,
+                    asset_type='PC',
+                    asset_id=pcid_value,
+                    pcid=pcid_value,
+                    action='Status Updated',
+                    maintenance_type='Status Change',
+                    old_status=old_status_value,
+                    new_status=status_param,
+                    computer_name=data.get('pcname') or old_pc.get('pcname'),
+                    asset_serial=serial or old_pc.get('serial_no'),
+                    technician=technician,
+                    performed_by=technician,
+                    remarks=(
+                        f"Status changed from {old_status_value or '—'} "
+                        f"to {status_param or '—'}."
+                    ),
+                )
+
+            for part_field in parts:
+                old_part_value = old_pc.get(part_field)
+                new_part_value = data.get(part_field)
+                if str(old_part_value or '').strip() == str(new_part_value or '').strip():
+                    continue
+                if not str(new_part_value or '').strip():
+                    # A removed part is an inventory release, not a replacement.
+                    continue
+                log_maintenance_event(
+                    cur,
+                    asset_type='PC',
+                    asset_id=pcid_value,
+                    pcid=pcid_value,
+                    action='Part Replacement',
+                    maintenance_type='Part Replacement',
+                    replaced_part=PC_PART_DEFINITIONS.get(part_field, {}).get(
+                        'label', part_field.replace('_', ' ').title()
+                    ),
+                    previous_part=old_part_value or '—',
+                    new_part=new_part_value,
+                    previous_part_status='IN USE' if old_part_value else '—',
+                    new_part_status='IN USE',
+                    old_status=old_status_value,
+                    new_status=status_param,
+                    computer_name=data.get('pcname') or old_pc.get('pcname'),
+                    asset_serial=serial or old_pc.get('serial_no'),
+                    technician=technician,
+                    performed_by=technician,
+                    remarks='Part updated from the PC edit form.',
+                )
+
             # After performing updates, fetch current DB status for logging/verification
             try:
                 cur.execute("SELECT status FROM pcinfofull WHERE pcid = %s", (data.get('pcid'),))
@@ -1233,12 +1913,83 @@ def update_pcinfofull():
 
     finally:
         conn.close()
+@manage_pc_bp.route('/pc-parts/available', methods=['GET'])
+def available_pc_parts():
+    """Return available inventory units matching a PC part (Section 3 dialog)."""
+    if 'user' not in session:
+        return jsonify({"success": False, "error": "Unauthorized", "results": []}), 401
+
+    part = str(request.args.get('part') or '').strip().lower()
+    if part not in PC_PART_DEFINITIONS:
+        return jsonify({"success": False, "error": "Invalid part selected", "results": []}), 400
+
+    try:
+        pcid = int(request.args.get('pcid')) if request.args.get('pcid') else None
+    except (TypeError, ValueError):
+        pcid = None
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            current_value = ''
+            pc_info = None
+            if pcid:
+                existing_parts = _existing_pc_part_columns(cur)
+                if part in existing_parts:
+                    cur.execute(
+                        f"SELECT pcid, pcname, serial_no, `{part}` AS current_value "
+                        "FROM pcinfofull WHERE pcid = %s",
+                        (pcid,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT pcid, pcname, serial_no, NULL AS current_value "
+                        "FROM pcinfofull WHERE pcid = %s",
+                        (pcid,),
+                    )
+                pc_row = cur.fetchone()
+                if pc_row:
+                    current_value = pc_row.get('current_value') or ''
+                    pc_info = {
+                        'pcid': pc_row.get('pcid'),
+                        'pcname': pc_row.get('pcname'),
+                        'serial_no': pc_row.get('serial_no'),
+                    }
+
+            results = _available_part_rows(cur, part, pcid)
+
+        return jsonify({
+            "success": True,
+            "part": part,
+            "part_label": PC_PART_DEFINITIONS[part]['label'],
+            "current_value": current_value,
+            "pc": pc_info,
+            "removed_status_options": list(REMOVED_PART_STATUS_OPTIONS),
+            "results": results,
+        })
+    except _ReplacementError as exc:
+        return jsonify({"success": False, "error": exc.message, "results": []}), exc.status_code
+    except Exception as exc:
+        try:
+            print(f"[pc-parts/available] {exc}")
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": "Could not load available inventory.", "results": []}), 500
+    finally:
+        conn.close()
+
+
 @manage_pc_bp.route('/replace-pc-part', methods=['POST'])
 def replace_pc_part():
     if 'user' not in session:
         return jsonify({"success": False, "error": "Unauthorized"}), 401
     # Accept JSON or form data; support single-part legacy or multiple replacements
     data = request.get_json(silent=True) or request.form
+
+    # New Section 3 flow: choose one part and one available inventory unit.
+    if isinstance(data, dict) and data.get('replacement_accession_id') and data.get('part'):
+        return _replace_pc_part_from_inventory(data)
+
     pcid = data.get('pcid')
     replacements = {}
 
@@ -1252,7 +2003,7 @@ def replace_pc_part():
         if part:
             replacements = {part: new_value}
 
-    allowed_parts = ['monitor', 'motherboard', 'ram', 'storage', 'gpu', 'psu', 'casing', 'mouse', 'keyboard', 'other_parts']
+    allowed_parts = list(PC_PART_ALLOWED)
     if not pcid or not replacements:
         return jsonify({"success": False, "error": "Invalid request parameters"}), 400
 
@@ -1271,6 +2022,12 @@ def replace_pc_part():
 
     conn = get_db_connection()
     try:
+        # Prepare the immutable audit schema before the write transaction.
+        try:
+            ensure_maintenance_history_schema(conn)
+        except Exception as schema_error:
+            print(f"[replace_pc_part] maintenance schema error: {schema_error}")
+
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
             # Determine which part columns actually exist in the DB for this install
             existing_parts = _existing_pc_part_columns(cur)
@@ -1319,10 +2076,19 @@ def replace_pc_part():
             # Fetch current values for only the existing parts
             if existing_parts:
                 cols = ', '.join(existing_parts)
-                cur.execute(f"SELECT {cols} FROM pcinfofull WHERE pcid = %s", (pcid,))
+                cur.execute(
+                    f"SELECT pcid, pcname, serial_no, status, {cols} "
+                    "FROM pcinfofull WHERE pcid = %s",
+                    (pcid,),
+                )
                 row = cur.fetchone()
             else:
-                row = {}
+                cur.execute(
+                    "SELECT pcid, pcname, serial_no, status "
+                    "FROM pcinfofull WHERE pcid = %s",
+                    (pcid,),
+                )
+                row = cur.fetchone()
 
             if not row:
                 return jsonify({"success": False, "error": "PC not found"}), 404
@@ -1406,6 +2172,7 @@ def replace_pc_part():
 
             # Record one report row per actually changed part.  The report is
             # what the per-PC "Replacements" button opens.
+            replacement_events = []
             try:
                 for f in parts_to_check:
                     old_value = row.get(f)
@@ -1420,6 +2187,9 @@ def replace_pc_part():
                     part_tokens = _parse_tokens(old_value) - _parse_tokens(new_value)
                     matched = [d for d in released_details if d.get('token') in part_tokens]
                     detail = matched[0] if matched else {}
+                    removed_status = detail.get('new_status') or (
+                        'Damaged' if mark_damaged else 'Available'
+                    )
                     cur.execute(
                         "INSERT INTO pc_part_replacements "
                         "(pcid, part, old_value, new_value, removed_status, accession_id, performed_by) "
@@ -1429,16 +2199,51 @@ def replace_pc_part():
                             f,
                             old_value,
                             new_value,
-                            detail.get('new_status') or ('Damaged' if mark_damaged else 'Available'),
+                            removed_status,
                             detail.get('accession_id'),
                             performed_by,
                         ),
+                    )
+                    replacement_events.append(
+                        {
+                            'part': f,
+                            'old_value': old_value,
+                            'new_value': new_value,
+                            'old_part_status': detail.get('old_status') or 'IN USE',
+                            'removed_status': removed_status,
+                        }
                     )
             except Exception as report_error:
                 try:
                     print(f"[replace_pc_part] Could not record replacement history: {report_error}")
                 except Exception:
                     pass
+
+            # Section 4: one immutable maintenance record per changed part.
+            technician = current_technician()
+            for event in replacement_events:
+                log_maintenance_event(
+                    cur,
+                    asset_type='PC',
+                    asset_id=pcid,
+                    pcid=pcid,
+                    action='Part Replacement',
+                    maintenance_type='Part Replacement',
+                    replaced_part=PC_PART_DEFINITIONS.get(
+                        event['part'], {}
+                    ).get('label', event['part'].replace('_', ' ').title()),
+                    previous_part=event['old_value'] or '—',
+                    new_part=event['new_value'] or '—',
+                    previous_part_status=event['removed_status'],
+                    new_part_status='IN USE',
+                    old_status=event['old_part_status'],
+                    new_status='IN USE',
+                    computer_name=row.get('pcname'),
+                    asset_serial=row.get('serial_no'),
+                    technician=technician,
+                    performed_by=technician,
+                    remarks=f"Removed part recorded as {event['removed_status']}.",
+                )
 
             # Audit and mark new values as IN USE
             for part, new_value in replacements.items():
@@ -1483,7 +2288,7 @@ def pc_replacement_history():
                 pc = cur.fetchone()
                 cur.execute(
                     "SELECT r.replacement_id, r.pcid, r.part, r.old_value, r.new_value, "
-                    "r.removed_status, r.accession_id, r.performed_at, "
+                    "r.removed_status, r.accession_id, r.new_accession_id, r.performed_at, "
                     "COALESCE(u.username, 'System') AS performed_by_name "
                     "FROM pc_part_replacements r "
                     "LEFT JOIN users u ON u.user_id = r.performed_by "

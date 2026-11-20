@@ -35,24 +35,54 @@
         </header>
 
       <!-- Summary cards -->
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+      <div class="grid grid-cols-2 gap-3 mb-6 lg:grid-cols-5">
         <div class="rounded-2xl overflow-hidden shadow bg-slate-700 text-white p-4 flex items-center justify-between">
           <div>
-            <div class="text-sm opacity-90">Pending Tickets</div>
+            <div class="text-xs sm:text-sm opacity-90">Pending</div>
             <div id="pending-summary-count" class="text-3xl md:text-4xl font-extrabold mt-1">0</div>
           </div>
-          <div class="p-3 bg-slate-800/60 rounded-full">
-            <i data-lucide="hourglass" class="w-6 h-6"></i>
+          <div class="p-2.5 bg-slate-800/60 rounded-full">
+            <i data-lucide="hourglass" class="w-5 h-5"></i>
           </div>
         </div>
 
         <div class="rounded-2xl overflow-hidden shadow bg-amber-500 text-white p-4 flex items-center justify-between">
           <div>
-            <div class="text-sm opacity-90">Ongoing Tickets</div>
+            <div class="text-xs sm:text-sm opacity-90">Ongoing</div>
             <div id="ongoing-summary-count" class="text-3xl md:text-4xl font-extrabold mt-1">0</div>
           </div>
-          <div class="p-3 bg-amber-600/70 rounded-full">
-            <i data-lucide="settings" class="w-6 h-6"></i>
+          <div class="p-2.5 bg-amber-600/70 rounded-full">
+            <i data-lucide="settings" class="w-5 h-5"></i>
+          </div>
+        </div>
+
+        <div class="rounded-2xl overflow-hidden shadow bg-emerald-600 text-white p-4 flex items-center justify-between">
+          <div>
+            <div class="text-xs sm:text-sm opacity-90">Resolved</div>
+            <div id="resolved-summary-count" class="text-3xl md:text-4xl font-extrabold mt-1">0</div>
+          </div>
+          <div class="p-2.5 bg-emerald-700/60 rounded-full">
+            <i data-lucide="check-circle-2" class="w-5 h-5"></i>
+          </div>
+        </div>
+
+        <div class="rounded-2xl overflow-hidden shadow bg-orange-500 text-white p-4 flex items-center justify-between">
+          <div>
+            <div class="text-xs sm:text-sm opacity-90">Unresolved</div>
+            <div id="unresolved-summary-count" class="text-3xl md:text-4xl font-extrabold mt-1">0</div>
+          </div>
+          <div class="p-2.5 bg-orange-600/60 rounded-full">
+            <i data-lucide="alert-circle" class="w-5 h-5"></i>
+          </div>
+        </div>
+
+        <div class="rounded-2xl overflow-hidden shadow bg-red-600 text-white p-4 flex items-center justify-between">
+          <div>
+            <div class="text-xs sm:text-sm opacity-90">Invalid</div>
+            <div id="invalid-summary-count" class="text-3xl md:text-4xl font-extrabold mt-1">0</div>
+          </div>
+          <div class="p-2.5 bg-red-700/60 rounded-full">
+            <i data-lucide="x-circle" class="w-5 h-5"></i>
           </div>
         </div>
       </div>
@@ -200,10 +230,18 @@
       const ongoingCountEl = document.getElementById('ongoing-count');
       const pendingSummaryEl = document.getElementById('pending-summary-count');
       const ongoingSummaryEl = document.getElementById('ongoing-summary-count');
+      const resolvedSummaryEl = document.getElementById('resolved-summary-count');
+      const unresolvedSummaryEl = document.getElementById('unresolved-summary-count');
+      const invalidSummaryEl = document.getElementById('invalid-summary-count');
       pendingEl.innerHTML = '<div class="text-slate-500 px-2 py-6">Loading…</div>';
       ongoingEl.innerHTML = '<div class="text-slate-500 px-2 py-6">Loading…</div>';
       pendingCountEl.textContent = '0';
       ongoingCountEl.textContent = '0';
+      if (pendingSummaryEl) pendingSummaryEl.textContent = '0';
+      if (ongoingSummaryEl) ongoingSummaryEl.textContent = '0';
+      if (resolvedSummaryEl) resolvedSummaryEl.textContent = '0';
+      if (unresolvedSummaryEl) unresolvedSummaryEl.textContent = '0';
+      if (invalidSummaryEl) invalidSummaryEl.textContent = '0';
       try {
         // build query params from search + filters
         const qEl = document.getElementById('ticket-search');
@@ -238,15 +276,25 @@
         }
 
         const pendingStatuses = ['open','pending'];
-        const ongoingStatuses = ['in progress','accepted','ongoing','processing','assigned'];
+        const ongoingStatuses = ['in progress','in-progress','inprogress','accepted','ongoing','processing','assigned'];
+        const resolvedStatuses = ['resolved','closed'];
+        const unresolvedStatuses = ['unresolved'];
+        const invalidStatuses = ['invalid','rejected','declined'];
 
         const pending = [];
         const ongoing = [];
+        let resolvedTotal = 0;
+        let unresolvedTotal = 0;
+        let invalidTotal = 0;
 
         data.forEach(t => {
           const s = (t.status || '').toLowerCase();
           if (pendingStatuses.includes(s) || s === '') pending.push(t);
           else if (ongoingStatuses.includes(s)) ongoing.push(t);
+
+          if (resolvedStatuses.includes(s)) resolvedTotal += 1;
+          else if (unresolvedStatuses.includes(s)) unresolvedTotal += 1;
+          else if (invalidStatuses.includes(s)) invalidTotal += 1;
         });
 
         // Render pending
@@ -374,6 +422,9 @@
         ongoingCountEl.textContent = String(ongoing.length);
         if (pendingSummaryEl) pendingSummaryEl.textContent = String(pending.length);
         if (ongoingSummaryEl) ongoingSummaryEl.textContent = String(ongoing.length);
+        if (resolvedSummaryEl) resolvedSummaryEl.textContent = String(resolvedTotal);
+        if (unresolvedSummaryEl) unresolvedSummaryEl.textContent = String(unresolvedTotal);
+        if (invalidSummaryEl) invalidSummaryEl.textContent = String(invalidTotal);
 
         // If the page was opened with a status hint, scroll that section into view
         try {

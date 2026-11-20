@@ -311,6 +311,18 @@ def loadReports():
     cursor.execute(count_query, params)
     total = cursor.fetchone()["total"]
 
+    # ---------- SUMMARY STATS ----------
+    stats_query = f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN category = 'PC' THEN 1 ELSE 0 END) AS pcs,
+            SUM(CASE WHEN category = 'Device' THEN 1 ELSE 0 END) AS devices,
+            COALESCE(SUM(acquisition_cost), 0) AS total_value
+        FROM ({query}) AS stats_table
+    """
+    cursor.execute(stats_query, params)
+    stats_row = cursor.fetchone() or {}
+
     # ---------- PAGINATION ----------
     query += " ORDER BY date_acquired DESC LIMIT %s OFFSET %s"
     params.extend([per_page, offset])
@@ -325,6 +337,12 @@ def loadReports():
 
     return jsonify({
         "data": data,
+        "stats": {
+            "total": int(stats_row.get("total") or 0),
+            "pcs": int(stats_row.get("pcs") or 0),
+            "devices": int(stats_row.get("devices") or 0),
+            "total_value": float(stats_row.get("total_value") or 0)
+        },
         "pagination": {
             "page": page,
             "per_page": per_page,

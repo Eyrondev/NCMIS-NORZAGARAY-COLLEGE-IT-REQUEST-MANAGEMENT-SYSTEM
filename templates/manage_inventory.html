@@ -1882,7 +1882,60 @@
           {% include 'pceditmodal.html' %}
           {% include 'itemeditmodal.html' %}  
         </div>
-        <script src="{{ url_for('static', filename='js/replace_part.js') }}"></script>
+        <script src="{{ url_for('static', filename='js/replace_part.js') }}?v=20261117-1"></script>
+      </div>
+    </div>
+
+    <!-- INVENTORY STATS -->
+    <div class="grid grid-cols-2 gap-3 mb-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+      <div class="rounded-xl border border-blue-200 bg-white p-3.5 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">PCs</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600"><i data-lucide="cpu" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-2xl font-extrabold text-slate-900">{{ inventory_stats.pc_count }}</p>
+      </div>
+      <div class="rounded-xl border border-indigo-200 bg-white p-3.5 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Items</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600"><i data-lucide="package" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-2xl font-extrabold text-slate-900">{{ inventory_stats.item_count }}</p>
+      </div>
+      <div class="rounded-xl border border-emerald-200 bg-white p-3.5 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Available</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600"><i data-lucide="check-circle-2" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-2xl font-extrabold text-slate-900">{{ inventory_stats.available }}</p>
+      </div>
+      <div class="rounded-xl border border-red-200 bg-white p-3.5 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Damaged</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600"><i data-lucide="alert-triangle" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-2xl font-extrabold text-slate-900">{{ inventory_stats.damaged }}</p>
+      </div>
+      <div class="rounded-xl border border-green-200 bg-white p-3.5 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Consumables</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-green-50 text-green-600"><i data-lucide="package-open" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-2xl font-extrabold text-slate-900">{{ inventory_stats.consumables }}</p>
+      </div>
+      <div class="rounded-xl border border-rose-200 bg-white p-3.5 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Surrendered / Archived</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-50 text-rose-600"><i data-lucide="archive" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-2xl font-extrabold text-slate-900">{{ inventory_stats.surrendered }}</p>
+      </div>
+      <div class="rounded-xl border border-amber-200 bg-white p-3.5 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Total Value</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-600"><i data-lucide="wallet" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-lg font-extrabold text-slate-900">&#8369;{{ "{:,.0f}".format(inventory_stats.total_value) }}</p>
       </div>
     </div>
 

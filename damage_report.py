@@ -104,6 +104,19 @@ def loadDamageReports():
             cursor.execute(count_query, params)
             total = cursor.fetchone()["total"]
 
+            # ---------- SUMMARY STATS ----------
+            stats_query = f"""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN category = 'PC' THEN 1 ELSE 0 END) AS pcs,
+                    SUM(CASE WHEN category = 'Device' THEN 1 ELSE 0 END) AS devices,
+                    SUM(CASE WHEN damage_type = 'Critical' THEN 1 ELSE 0 END) AS critical,
+                    SUM(CASE WHEN damage_type = 'Major' THEN 1 ELSE 0 END) AS major
+                FROM ({query}) AS stats_table
+            """
+            cursor.execute(stats_query, params)
+            stats_row = cursor.fetchone() or {}
+
             # ---------- PAGINATION ----------
             query += " ORDER BY date_acquired DESC LIMIT %s OFFSET %s"
             params_with_pagination = params + [per_page, offset]
@@ -115,6 +128,13 @@ def loadDamageReports():
 
         return jsonify({
             "data": data,
+            "stats": {
+                "total": int(stats_row.get("total") or 0),
+                "pcs": int(stats_row.get("pcs") or 0),
+                "devices": int(stats_row.get("devices") or 0),
+                "critical": int(stats_row.get("critical") or 0),
+                "major": int(stats_row.get("major") or 0)
+            },
             "pagination": {
                 "page": page,
                 "per_page": per_page,
@@ -127,6 +147,13 @@ def loadDamageReports():
     except Exception as e:
         return jsonify({
             "data": [],
+            "stats": {
+                "total": 0,
+                "pcs": 0,
+                "devices": 0,
+                "critical": 0,
+                "major": 0
+            },
             "pagination": {
                 "page": 1,
                 "per_page": 10,

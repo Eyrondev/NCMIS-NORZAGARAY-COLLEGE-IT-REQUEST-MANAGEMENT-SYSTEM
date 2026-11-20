@@ -1,6 +1,15 @@
 from flask import render_template, request, redirect, url_for, session, Flask, flash, Blueprint,g
 import json
 import os
+import sys
+
+# Windows consoles may default to cp1252; make log/print output resilient to
+# emoji and other non-ASCII text used in diagnostic messages.
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
 
 from login import login_bp
 from userborrow import userborrow_bp
@@ -18,6 +27,7 @@ from manage_consumable import manage_consumable_bp
 from notification import notification_bp
 from sidebar import get_user_access
 from maintenance import maintenance_bp
+from maintenance_reports import maintenance_reports_bp
 from damage_report import damage_report_bp
 from receive_item import receive_item_bp
 from stock_room import stock
@@ -50,6 +60,7 @@ app.register_blueprint(manage_consumable_bp)
 app.register_blueprint(notification_bp)
 app.register_blueprint(manage_item_bp, url_prefix='/manage_inventory')
 app.register_blueprint(maintenance_bp)
+app.register_blueprint(maintenance_reports_bp)
 app.register_blueprint(damage_report_bp)
 app.register_blueprint(receive_item_bp)
 app.register_blueprint(stock, url_prefix='/stock_room')
@@ -121,6 +132,8 @@ def add_no_cache_headers(response):
             'manage_pc_bp.filter_pcs',
             'manage_consumable_bp.filter_consumables',
             'report_bp.export_reports',
+            'maintenance_reports_bp.export_maintenance_reports_excel',
+            'maintenance_reports_bp.export_maintenance_reports_pdf',
         }
 
         endpoint_activity_map = {
@@ -178,6 +191,8 @@ def add_no_cache_headers(response):
 
             # Reports
             'report_bp.export_reports': ('Export File', 'Reports'),
+            'maintenance_reports_bp.export_maintenance_reports_excel': ('Export File', 'Maintenance Reports'),
+            'maintenance_reports_bp.export_maintenance_reports_pdf': ('Export File', 'Maintenance Reports'),
         }
 
         is_ajax_request = request.headers.get('X-Requested-With') == 'XMLHttpRequest'

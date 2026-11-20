@@ -11,10 +11,19 @@
 
     <!-- Header -->
     <div class="bg-white shadow mb-6">
-        <div class="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
-            <h1 class="text-xl font-semibold text-gray-800">
-                Maintenance History
-            </h1>
+        <div class="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center gap-4">
+            <div>
+                <h1 class="text-xl font-semibold text-gray-800">
+                    Maintenance History
+                </h1>
+                <p class="mt-0.5 text-sm text-gray-500">
+                    {% if asset_id %}
+                        {{ asset_type|capitalize }} #{{ asset_id }} &middot; Immutable repair and replacement trail
+                    {% else %}
+                        Immutable repair and replacement trail
+                    {% endif %}
+                </p>
+            </div>
             <button
                 onclick="history.back()"
                 class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded text-sm">
@@ -24,66 +33,106 @@
     </div>
 
     <!-- Content -->
-    <div class="max-w-7xl mx-auto px-6">
+    <div class="max-w-7xl mx-auto px-6 pb-10">
+
+        <div class="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <span class="mt-0.5 shrink-0 font-bold">!</span>
+            <p><span class="font-semibold">Immutable audit trail.</span> Saved maintenance records cannot be edited or deleted.</p>
+        </div>
 
         {% if logs and logs|length > 0 %}
         <div class="overflow-x-auto bg-white shadow rounded-lg">
-            <table class="min-w-full border border-gray-200">
+            <table class="min-w-full border border-gray-200" style="min-width: 1500px;">
                 <thead class="bg-gray-50">
                     <tr>
-                        <th class="px-4 py-2 border text-left text-sm font-semibold">Date</th>
-                        <th class="px-4 py-2 border text-left text-sm font-semibold">Action</th>
-                        <th class="px-4 py-2 border text-left text-sm font-semibold">Status</th>
-                        <th class="px-4 py-2 border text-left text-sm font-semibold">Risk Level</th>
-                        <th class="px-4 py-2 border text-left text-sm font-semibold">Performed By</th>
-                        <th class="px-4 py-2 border text-left text-sm font-semibold">Remarks</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">Maintenance Date</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">Computer Name</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">Asset ID</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">Technician</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">Maintenance Type</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">Replaced Part</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">Previous Part</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">New Part</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">Previous Status</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">New Status</th>
+                        <th class="px-4 py-2 border text-left text-xs font-semibold whitespace-nowrap">Remarks</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for log in logs %}
-                    <tr class="hover:bg-gray-50">
-                        <!-- Date -->
-                        <td class="px-4 py-2 border text-sm text-gray-700">
+                    <tr class="hover:bg-gray-50 align-top">
+                        <!-- Maintenance Date -->
+                        <td class="px-4 py-2 border text-sm text-gray-700 whitespace-nowrap">
                             {{ log.performed_at }}
                         </td>
 
-                        <!-- Action -->
+                        <!-- Computer Name -->
                         <td class="px-4 py-2 border text-sm font-medium text-gray-800">
-                            {{ log.action }}
+                            {{ log.computer_name or '—' }}
                         </td>
 
-                        <!-- Status Change -->
-                        <td class="px-4 py-2 border text-sm">
-                            <span class="text-gray-500">
-                                {{ log.previous_status or '—' }}
-                            </span>
-                            →
-                            <span class="font-semibold text-gray-800">
-                                {{ log.new_status }}
-                            </span>
+                        <!-- Asset ID -->
+                        <td class="px-4 py-2 border text-sm text-gray-700 whitespace-nowrap">
+                            <span class="font-semibold">{{ asset_type or '' }} #{{ asset_id }}</span>
+                            {% if log.asset_serial %}
+                                <div class="text-xs text-gray-400">SN: {{ log.asset_serial }}</div>
+                            {% endif %}
                         </td>
 
-                        <!-- Risk Change -->
-                        <td class="px-4 py-2 border text-sm">
-                            <span class="text-gray-500">
-                                {{ log.previous_risk_level or '—' }}
-                            </span>
-                            →
-                            <span class="font-semibold
-                                {% if log.new_risk_level == 'High' %}text-red-600
-                                {% elif log.new_risk_level == 'Medium' %}text-yellow-600
-                                {% else %}text-green-600{% endif %}">
-                                {{ log.new_risk_level }}
-                            </span>
-                        </td>
-
-                        <!-- Performed By -->
+                        <!-- Technician -->
                         <td class="px-4 py-2 border text-sm text-gray-700">
-                            {{ log.performed_by or 'System' }}
+                            {{ log.technician or log.performed_by or 'System' }}
+                        </td>
+
+                        <!-- Maintenance Type -->
+                        <td class="px-4 py-2 border text-sm text-gray-800">
+                            <span class="font-semibold">{{ log.maintenance_type or log.action }}</span>
+                            {% if log.action and log.action != (log.maintenance_type or log.action) %}
+                                <div class="text-xs text-gray-400">{{ log.action }}</div>
+                            {% endif %}
+                        </td>
+
+                        <!-- Replaced Part -->
+                        <td class="px-4 py-2 border text-sm text-gray-700">
+                            {{ log.replaced_part or '—' }}
+                        </td>
+
+                        <!-- Previous Part -->
+                        <td class="px-4 py-2 border text-sm text-gray-700" style="max-width:220px; overflow-wrap:anywhere;">
+                            {{ log.previous_part or '—' }}
+                            {% if log.previous_part_status %}
+                                <div class="text-xs text-gray-400">Status: {{ log.previous_part_status }}</div>
+                            {% endif %}
+                        </td>
+
+                        <!-- New Part -->
+                        <td class="px-4 py-2 border text-sm text-gray-700" style="max-width:220px; overflow-wrap:anywhere;">
+                            {{ log.new_part or '—' }}
+                            {% if log.new_part_status %}
+                                <div class="text-xs text-gray-400">Status: {{ log.new_part_status }}</div>
+                            {% endif %}
+                        </td>
+
+                        <!-- Previous Status -->
+                        <td class="px-4 py-2 border text-sm text-gray-500">
+                            {{ log.previous_status or '—' }}
+                        </td>
+
+                        <!-- New Status -->
+                        <td class="px-4 py-2 border text-sm">
+                            <span class="font-semibold text-gray-800">{{ log.new_status or '—' }}</span>
+                            {% if log.new_risk_level %}
+                                <div class="text-xs
+                                    {% if log.new_risk_level == 'High' %}text-red-600
+                                    {% elif log.new_risk_level == 'Medium' %}text-yellow-600
+                                    {% else %}text-green-600{% endif %}">
+                                    Risk: {{ log.new_risk_level }}
+                                </div>
+                            {% endif %}
                         </td>
 
                         <!-- Remarks -->
-                        <td class="px-4 py-2 border text-sm text-gray-700">
+                        <td class="px-4 py-2 border text-sm text-gray-700" style="max-width:260px; overflow-wrap:anywhere;">
                             {{ log.remarks or '—' }}
                         </td>
                     </tr>

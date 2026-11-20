@@ -27,34 +27,53 @@ def borrow_page():
             return redirect(url_for('userborrow_bp.borrow_page'))
 
         conn = get_db_connection()
-        with conn.cursor() as cur:
-            # Insert student if new
-            cur.execute("""
-                INSERT IGNORE INTO students (student_id, last_name, first_name, middle_initial)
-                VALUES (%s, %s, %s, %s)
-            """, (student_id, last_name, first_name, middle_initial))
+        try:
+            with conn.cursor() as cur:
+                # Resolve the selected unit to its parent device so the
+                # borrow request satisfies fk_borrow_device (devices.device_id).
+                cur.execute("""
+                    SELECT device_id FROM devices_units
+                    WHERE accession_id=%s AND status='Available'
+                """, (accession_id,))
+                unit = cur.fetchone()
+                if not unit:
+                    flash('The selected device unit is no longer available.')
+                    return redirect(url_for('userborrow_bp.borrow_page'))
+                device_id = unit['device_id']
 
-            # Insert borrow request (note: device_id instead of accession_id)
-            cur.execute("""
-                INSERT INTO borrow_requests
-                    (student_id, last_name, first_name, middle_initial,
-                     device_id, borrow_date, reason, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'Pending')
-            """, (student_id, last_name, first_name, middle_initial,
-                  accession_id, borrow_date, reason))
+                # Insert student if new
+                cur.execute("""
+                    INSERT IGNORE INTO students (student_id, last_name, first_name, middle_initial)
+                    VALUES (%s, %s, %s, %s)
+                """, (student_id, last_name, first_name, middle_initial))
 
-            # Update unit status
-            cur.execute("""
-                UPDATE devices_units
-                SET status='Borrowed'
-                WHERE accession_id=%s
-            """, (accession_id,))
+                # Insert borrow request
+                cur.execute("""
+                    INSERT INTO borrow_requests
+                        (student_id, last_name, first_name, middle_initial,
+                         device_id, borrow_date, reason, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'Pending')
+                """, (student_id, last_name, first_name, middle_initial,
+                      device_id, borrow_date, reason))
 
-        conn.commit()
-        conn.close()
+                # Update unit status
+                cur.execute("""
+                    UPDATE devices_units
+                    SET status='Borrowed'
+                    WHERE accession_id=%s
+                """, (accession_id,))
 
-        flash(f'Request for unit {accession_id} submitted!')
-        print(f"DEBUG: Borrow request inserted for student {student_id} on unit {accession_id}")
+            conn.commit()
+            flash(f'Request for unit {accession_id} submitted!')
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print(f"BORROW REQUEST ERROR: {exc}")
+            flash('Unable to submit the borrow request. Please try again.')
+        finally:
+            conn.close()
 
         return redirect(url_for('userborrow_bp.borrow_page'))
 
@@ -89,16 +108,41 @@ def get_available_units():
 
 @userborrow_bp.route('/decline/<int:borrow_id>', methods=['POST'])
 def cancel_request(borrow_id):
+    if not session.get('user'):
+        return redirect(url_for('login_bp.login'))
+
     conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            UPDATE borrow_requests
-            SET status='Cancelled'
-            WHERE borrow_id=%s AND user_id=%s AND status='Pending'
-        """, (borrow_id, session['user_id']))
-    conn.commit()
-    conn.close()
-    flash('Request cancelled')
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT device_id FROM borrow_requests WHERE borrow_id=%s AND status='Pending'",
+                (borrow_id,),
+            )
+            request_row = cur.fetchone()
+            if not request_row:
+                flash('Only pending requests can be cancelled.')
+                return redirect(url_for('userborrow_bp.borrow_page'))
+
+            cur.execute(
+                "UPDATE borrow_requests SET status='Cancelled' WHERE borrow_id=%s AND status='Pending'",
+                (borrow_id,),
+            )
+            cur.execute(
+                "UPDATE devices_units SET status='Available' WHERE device_id=%s AND status='Borrowed' LIMIT 1",
+                (request_row['device_id'],),
+            )
+        conn.commit()
+        flash('Request cancelled')
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"BORROW CANCEL ERROR: {exc}")
+        flash('Unable to cancel the borrow request.')
+    finally:
+        conn.close()
+
     return redirect(url_for('userborrow_bp.borrow_page'))
 
 def get_available_devices():
@@ -133,19 +177,42 @@ def get_stock_counts():
 
 
 @userborrow_bp.route('/return/<int:borrow_id>', methods=['POST'])
+def mark_returned_borrow_request(borrow_id):
+    if not session.get('user'):
+        return redirect(url_for('login_bp.login'))
 
-def mark_returned_borrow_request(borrow_id,now=now):
-
-    
-   
     conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            UPDATE borrow_requests
-            SET status = 'Returned', return_date = now()
-             WHERE borrow_id=%s AND user_id=%s AND status='Approved'
-        """, (borrow_id,))
-    conn.commit()
-    conn.close()
-    flash('Item marked as returned.')
-    return redirect(url_for('admin'))        
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT device_id FROM borrow_requests WHERE borrow_id=%s AND status='Approved'",
+                (borrow_id,),
+            )
+            request_row = cur.fetchone()
+            if not request_row:
+                flash('Only approved requests can be marked as returned.')
+                return redirect(url_for('userborrow_bp.borrow_page'))
+
+            cur.execute(
+                "UPDATE borrow_requests SET status='Returned', return_date=CURDATE() "
+                "WHERE borrow_id=%s AND status='Approved'",
+                (borrow_id,),
+            )
+            cur.execute(
+                "UPDATE devices_units SET status='Available' WHERE device_id=%s AND status='Borrowed' LIMIT 1",
+                (request_row['device_id'],),
+            )
+        conn.commit()
+        flash('Item marked as returned.')
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"BORROW RETURN ERROR: {exc}")
+        flash('Unable to mark the item as returned.')
+    finally:
+        conn.close()
+
+    return redirect(url_for('userborrow_bp.borrow_page'))
+        

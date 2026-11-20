@@ -828,6 +828,37 @@
       </div>
     </div>
 
+    <div class="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div class="rounded-xl border border-blue-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Offices / Facilities</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600"><i data-lucide="building-2" class="h-4 w-4"></i></span>
+        </div>
+        <p id="departmentStatTotal" class="mt-2 text-2xl font-extrabold text-slate-900">0</p>
+      </div>
+      <div class="rounded-xl border border-indigo-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">PCs</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600"><i data-lucide="monitor" class="h-4 w-4"></i></span>
+        </div>
+        <p id="departmentStatPcs" class="mt-2 text-2xl font-extrabold text-slate-900">0</p>
+      </div>
+      <div class="rounded-xl border border-emerald-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Devices</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600"><i data-lucide="hard-drive" class="h-4 w-4"></i></span>
+        </div>
+        <p id="departmentStatDevices" class="mt-2 text-2xl font-extrabold text-slate-900">0</p>
+      </div>
+      <div class="rounded-xl border border-amber-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">PC Capacity</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-600"><i data-lucide="gauge" class="h-4 w-4"></i></span>
+        </div>
+        <p id="departmentStatCapacity" class="mt-2 text-2xl font-extrabold text-slate-900">0</p>
+      </div>
+    </div>
+
     <div class="layout-card rounded-xl p-4">
       <div class="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
@@ -1523,6 +1554,26 @@
 
         const countEl = document.getElementById('departmentCount');
         if (countEl) countEl.textContent = String(cachedDepartments.length);
+
+        const departmentTotals = cachedDepartments.reduce((totals, dept) => {
+          totals.pcs += Number(dept.pc_count || 0);
+          totals.devices += Number(dept.device_count || 0);
+          totals.capacity += Number(dept.max_pc_allowed || 0);
+          return totals;
+        }, { pcs: 0, devices: 0, capacity: 0 });
+
+        const statTotalEl = document.getElementById('departmentStatTotal');
+        const statPcsEl = document.getElementById('departmentStatPcs');
+        const statDevicesEl = document.getElementById('departmentStatDevices');
+        const statCapacityEl = document.getElementById('departmentStatCapacity');
+        if (statTotalEl) statTotalEl.textContent = String(cachedDepartments.length);
+        if (statPcsEl) statPcsEl.textContent = String(departmentTotals.pcs);
+        if (statDevicesEl) statDevicesEl.textContent = String(departmentTotals.devices);
+        if (statCapacityEl) {
+          statCapacityEl.textContent = departmentTotals.capacity > 0
+            ? `${departmentTotals.pcs} / ${departmentTotals.capacity}`
+            : String(departmentTotals.pcs);
+        }
 
         if (!departmentListEl) return;
 

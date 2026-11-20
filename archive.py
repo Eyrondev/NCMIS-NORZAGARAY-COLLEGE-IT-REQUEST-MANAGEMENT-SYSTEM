@@ -2,6 +2,7 @@ from flask import Blueprint, render_template, request, jsonify, send_file
 from db import get_db_connection
 from io import BytesIO
 import pandas as pd
+import pymysql
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -33,9 +34,63 @@ def _table_has_column(conn, table_name, column_name):
     _archive_table_column_cache[key] = exists
     return exists
 
+def _archive_stats():
+    """Counts and value for the Archive mini-dashboard."""
+    stats = {
+        "pcs": 0,
+        "items": 0,
+        "consumables": 0,
+        "total_value": 0.0,
+    }
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            def archived_predicate(table_alias, table_name):
+                if _table_has_column(conn, table_name, 'is_archived'):
+                    return f"{table_alias}.is_archived = 1"
+                if _table_has_column(conn, table_name, 'deleted_at'):
+                    return f"{table_alias}.deleted_at IS NOT NULL"
+                return "0=1"
+
+            pc_pred = archived_predicate('pc', 'pcinfofull')
+            cur.execute(
+                f"SELECT COUNT(*) AS total, COALESCE(SUM(pc.acquisition_cost), 0) AS total_value "
+                f"FROM pcinfofull pc WHERE {pc_pred}"
+            )
+            pc_row = cur.fetchone() or {}
+
+            item_pred = archived_predicate('df', 'devices_full')
+            cur.execute(
+                f"SELECT COUNT(*) AS total, COALESCE(SUM(df.acquisition_cost), 0) AS total_value "
+                f"FROM devices_full df WHERE {item_pred}"
+            )
+            item_row = cur.fetchone() or {}
+
+            consumable_pred = archived_predicate('c', 'consumables')
+            cur.execute(
+                f"SELECT COUNT(*) AS total FROM consumables c WHERE {consumable_pred}"
+            )
+            consumable_row = cur.fetchone() or {}
+
+            stats["pcs"] = int(pc_row.get('total') or 0)
+            stats["items"] = int(item_row.get('total') or 0)
+            stats["consumables"] = int(consumable_row.get('total') or 0)
+            stats["total_value"] = (
+                float(pc_row.get('total_value') or 0)
+                + float(item_row.get('total_value') or 0)
+            )
+    except Exception as exc:
+        print(f"ARCHIVE STATS ERROR: {exc}")
+    finally:
+        conn.close()
+
+    return stats
+
+
 @archive_bp.route('/archive')
 def archive_page():
-    return render_template('archive.html')
+    return render_template('archive.html', stats=_archive_stats())
 
 @archive_bp.route('/api/archived-pcs')
 def get_archived_pcs():

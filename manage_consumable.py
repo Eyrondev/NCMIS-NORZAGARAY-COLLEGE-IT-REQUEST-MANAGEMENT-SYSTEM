@@ -153,58 +153,68 @@ def get_consumables():
 @manage_consumable_bp.route('/archive-consumable/<int:id>', methods=['POST'])
 def archive_consumable(id):
     """Mark a consumable as archived (is_archived=1, deleted_at=NOW()).
-    This is a non-destructive archive and will not remove rows.
+
+    The row is retained so usage history keeps working. The status column is an
+    enum that does not include "Archived", so archiving must never write that
+    value into it.
     """
     conn = get_db_connection()
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
     try:
         with conn.cursor() as cur:
-            # Ensure archive columns exist. If they don't, try to add them
-            cur.execute("SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'consumables' AND COLUMN_NAME = 'is_archived'")
-            row = cur.fetchone()
-            has_is_archived = bool(row and int(row.get('cnt', 0)) > 0) if isinstance(row, dict) else bool(row and row[0] > 0)
+            # Ensure archive columns exist; add them when the installation is
+            # missing a migration.
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'consumables' "
+                "AND COLUMN_NAME = 'is_archived'"
+            )
+            row = cur.fetchone() or {}
+            has_is_archived = int((row.get('cnt') if isinstance(row, dict) else row[0]) or 0) > 0
 
             if not has_is_archived:
                 try:
-                    cur.execute("ALTER TABLE consumables ADD COLUMN is_archived TINYINT(1) DEFAULT 0, ADD COLUMN deleted_at DATETIME NULL")
+                    cur.execute(
+                        "ALTER TABLE consumables "
+                        "ADD COLUMN is_archived TINYINT(1) DEFAULT 0, "
+                        "ADD COLUMN deleted_at DATETIME NULL"
+                    )
                     conn.commit()
-                except Exception:
-                    # If we cannot alter table, rollback and continue - we'll fallback to setting status
+                except Exception as alter_error:
                     conn.rollback()
+                    raise RuntimeError(
+                        'Consumable archiving is unavailable because the archive '
+                        'columns could not be created.'
+                    ) from alter_error
 
-            # Try to mark archived (non-destructive)
-            try:
-                # Mark as archived and set status explicitly to ARCHIVED
-                cur.execute("UPDATE consumables SET is_archived = 1, deleted_at = NOW(), status = %s WHERE accession_id = %s", ('ARCHIVED', id))
-                if cur.rowcount == 0:
-                    # No rows updated - maybe accession_id type mismatch, attempt update by casting to string
-                    cur.execute("UPDATE consumables SET is_archived = 1, deleted_at = NOW(), status = %s WHERE CAST(accession_id AS CHAR) = %s", ('ARCHIVED', str(id)))
+            cur.execute(
+                "UPDATE consumables SET is_archived = 1, deleted_at = NOW() "
+                "WHERE accession_id = %s",
+                (id,),
+            )
+            if cur.rowcount == 0:
+                cur.execute(
+                    "UPDATE consumables SET is_archived = 1, deleted_at = NOW() "
+                    "WHERE CAST(accession_id AS CHAR) = %s",
+                    (str(id),),
+                )
 
-                conn.commit()
-                if is_ajax:
-                    return jsonify(success=True, message='Consumable archived')
-                flash('Consumable archived', 'success')
-                return redirect(url_for('manage_inventory.inventory_load', section='consumable'))
+            if cur.rowcount == 0:
+                raise ValueError('Consumable not found.')
 
-            except Exception:
-                conn.rollback()
-                # Final fallback: set status to ARCHIVED so it no longer shows as active
-                try:
-                    cur.execute("UPDATE consumables SET status = %s WHERE accession_id = %s", ('ARCHIVED', id))
-                    conn.commit()
-                    if is_ajax:
-                        return jsonify(success=True, message='Consumable set to ARCHIVED')
-                    flash('Consumable set to ARCHIVED', 'success')
-                    return redirect(url_for('manage_inventory.inventory_load', section='consumable'))
-                except Exception as e2:
-                    conn.rollback()
-                    raise e2
+            conn.commit()
+
+            if is_ajax:
+                return jsonify(success=True, message='Consumable archived')
+            flash('Consumable archived', 'success')
+            return redirect(url_for('manage_inventory.inventory_consumables'))
 
     except Exception as e:
         conn.rollback()
         if is_ajax:
             return jsonify(success=False, error=str(e)), 500
         flash(f'Error archiving consumable: {e}', 'danger')
+        return redirect(url_for('manage_inventory.inventory_consumables'))
     finally:
         conn.close()
 

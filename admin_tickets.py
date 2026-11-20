@@ -90,7 +90,7 @@ def admin_tickets_list():
                 # prefer ticket_devices association if available
                 with conn.cursor() as _c:
                     _c.execute("SELECT COUNT(*) AS cnt FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ticket_devices'")
-                    td_exists = bool(_c.fetchone()[0])
+                    td_exists = bool((_c.fetchone() or {}).get('cnt'))
                 if td_exists:
                     where.append("t.ticket_id IN (SELECT ticket_id FROM ticket_devices WHERE device_id = %s)")
                     params.append(did)
@@ -98,7 +98,7 @@ def admin_tickets_list():
                     # fallback to device_id column on tickets (if present)
                     with conn.cursor() as _c:
                         _c.execute("SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tickets' AND COLUMN_NAME = 'device_id'")
-                        has_devcol = bool(_c.fetchone()[0])
+                        has_devcol = bool((_c.fetchone() or {}).get('cnt'))
                     if has_devcol:
                         where.append("t.device_id = %s")
                         params.append(did)
@@ -299,24 +299,19 @@ def admin_ticket_action(ticket_id):
         # Ensure tickets table has resolved_at and resolved_by_id columns (migration-safe)
         try:
             with conn.cursor() as _c:
-                try:
-                    _c.execute("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tickets' AND COLUMN_NAME = 'resolved_at'")
-                    if not int(_c.fetchone()[0]):
-                        _c.execute("ALTER TABLE tickets ADD COLUMN resolved_at DATETIME NULL AFTER created_at")
-                except Exception:
-                    pass
-                try:
-                    _c.execute("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tickets' AND COLUMN_NAME = 'resolved_by_id'")
-                    if not int(_c.fetchone()[0]):
-                        _c.execute("ALTER TABLE tickets ADD COLUMN resolved_by_id INT NULL AFTER resolved_at")
-                except Exception:
-                    pass
-                try:
-                    conn.commit()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                _c.execute("SHOW COLUMNS FROM tickets")
+                existing_cols = {row.get('Field') for row in _c.fetchall()}
+                if 'resolved_at' not in existing_cols:
+                    _c.execute("ALTER TABLE tickets ADD COLUMN resolved_at DATETIME NULL AFTER created_at")
+                if 'resolved_by_id' not in existing_cols:
+                    _c.execute("ALTER TABLE tickets ADD COLUMN resolved_by_id INT NULL AFTER resolved_at")
+                conn.commit()
+        except Exception as exc:
+            print(f"ADMIN TICKET MIGRATION ERROR: {exc}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
         # Update ticket status and set resolved metadata when applicable
         try:
@@ -329,11 +324,13 @@ def admin_ticket_action(ticket_id):
                 else:
                     cursor.execute("UPDATE tickets SET status = %s WHERE ticket_id = %s", (new_status, ticket_id))
             conn.commit()
-        except Exception:
+        except Exception as exc:
             try:
                 conn.rollback()
             except Exception:
                 pass
+            print(f"ADMIN TICKET UPDATE ERROR: {exc}")
+            return jsonify({'status': 'error', 'message': 'Failed to update ticket status'}), 500
 
         # persist the feedback/response (non-fatal)
         try:

@@ -244,101 +244,121 @@
   display: none !important;
 }
 
-/* Replace Part autocomplete styles */
-.rp-field { position: relative; }
-.rp-suggestions {
-  display: none;
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(100% + 6px);
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  box-shadow: 0 10px 30px rgba(2, 6, 23, 0.08);
-  border-radius: 0.5rem;
-  max-height: 260px;
-  overflow: auto;
-  z-index: 1100;
-  padding: 0.25rem;
-}
-.rp-suggestion {
-  padding: 0.5rem 0.75rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  border-radius: 0.375rem;
-}
-.rp-suggestion:hover,
-.rp-suggestion[aria-selected="true"] {
-  background: #f8fafc;
-}
-.rp-suggestion-label {
-  color: #0f172a;
-  font-size: 0.95rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.rp-suggestion-id {
-  color: #64748b;
-  font-size: 0.78rem;
-  flex-shrink: 0;
-  margin-left: 0.5rem;
-}
-.rp-suggestions::-webkit-scrollbar {
-  width: 8px;
-}
-.rp-suggestions::-webkit-scrollbar-thumb {
-  background: rgba(100,116,139,0.24);
-  border-radius: 9999px;
-}
-
-/* Scoped styles for Replace Part modal enhancements */
+/* Replace Part dialog */
 #replacePartModalContent {
-  --rp-input-padding: 0.78rem 1rem;
-  --rp-input-font: 1rem;
+  --rp-input-padding: 0.7rem 0.9rem;
+  --rp-input-font: 0.92rem;
 }
 
 #replacePartModalContent .rp-input {
   padding: var(--rp-input-padding);
   font-size: var(--rp-input-font);
   border-radius: 0.75rem;
-  border: 1px solid #e6eef9;
+  border: 1px solid #dbe4f0;
   background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+  color: #0f172a;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+#replacePartModalContent .rp-input:focus {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+#replacePartModalContent .rp-input:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
 }
 
 #replacePartModalContent .label {
   color: #0f172a;
-  font-weight: 600;
+  font-weight: 700;
 }
-
-#replacePartModalContent .rp-field { margin-bottom: 0.25rem; }
 
 /* Larger, more prominent action buttons only inside replace modal */
 #replacePartModalContent .rp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   padding: 0.72rem 1.1rem;
-  font-size: 0.98rem;
-  border-radius: 0.675rem;
-  box-shadow: 0 8px 18px rgba(14,30,70,0.08);
+  font-size: 0.92rem;
+  font-weight: 700;
+  border-radius: 0.7rem;
+  box-shadow: 0 8px 18px rgba(14, 30, 70, 0.08);
 }
 
 #replacePartModalContent .btn-blue {
   background: linear-gradient(140deg, #2563eb 0%, #4338ca 100%);
-  border: 1px solid rgba(37,99,235,0.18);
+  color: #ffffff;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+}
+
+#replacePartModalContent .btn-blue:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 #replacePartModalContent .btn-gray {
-  background: linear-gradient(180deg, #f3f4f6 0%, #e5e7eb 100%);
-  color: #111827;
-  border: 1px solid rgba(0,0,0,0.06);
+  background: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+  color: #334155;
+  border: 1px solid #dbe4f0;
 }
 
-/* Make suggestions feel like cards */
-.rp-suggestion { transition: box-shadow 0.14s ease, transform 0.08s ease; }
-.rp-suggestion:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(2,6,23,0.06); }
+.rp-status-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  background: #ffffff;
+  padding: 0.7rem 0.75rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.rp-status-option:hover {
+  border-color: #c7d2fe;
+  background: #f8faff;
+}
+
+.rp-status-option.is-selected {
+  border-color: #6366f1;
+  background: #eef2ff;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+}
+
+.rp-status-option input {
+  margin-top: 0.15rem;
+  accent-color: #4f46e5;
+}
+
+.rp-status-title {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #1e293b;
+}
+
+.rp-status-desc {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: #64748b;
+}
+
+.rp-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 0.8rem;
+  background: #f8fafc;
+  padding: 1rem;
+  text-align: center;
+}
 
 @media (min-width: 768px) {
   #replacePartModalContent .grid { gap: 1rem; }
@@ -347,89 +367,116 @@
 
 <!-- Replace Part Modal -->
 <div id="replacePartModal" class="hidden fixed inset-0 inventory-modal-backdrop flex items-center justify-center z-50 transition-all duration-300 p-4">
-  <div id="replacePartModalContent" class="bg-white p-8 rounded-2xl w-full max-w-4xl shadow-2xl overflow-y-auto max-h-[90vh] transform scale-95 transition-transform duration-300">
-    <div class="flex items-center justify-between mb-4">
-      <div>
-        <h3 class="text-2xl font-semibold">Replace PC Part</h3>
-        <p class="text-sm text-gray-500 mt-1">Choose replacement parts from your item catalog. Click an entry to select.</p>
+  <div id="replacePartModalContent" class="bg-white p-6 sm:p-8 rounded-2xl w-full max-w-3xl shadow-2xl overflow-y-auto max-h-[90vh] transform scale-95 transition-transform duration-300">
+    <div class="flex items-start justify-between gap-4">
+      <div class="flex items-start gap-3">
+        <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
+          <i data-lucide="repeat" class="h-5 w-5"></i>
+        </span>
+        <div>
+          <h3 class="text-xl font-extrabold tracking-tight text-slate-900">Replace PC Part</h3>
+          <p class="mt-0.5 text-sm text-slate-500">Pick an available inventory unit and record what happens to the old part.</p>
+        </div>
       </div>
-      <button type="button" onclick="closeReplacePartModal()" class="text-gray-500 hover:text-gray-700">
-        <i data-lucide="x" class="w-5 h-5"></i>
+      <button type="button" onclick="closeReplacePartModal()" class="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label="Close replacement dialog">
+        <i data-lucide="x" class="h-5 w-5"></i>
       </button>
     </div>
-    <form id="replacePartForm" class="space-y-4">
+
+    <form id="replacePartForm" class="mt-5 space-y-5" novalidate>
       <input type="hidden" id="replacePcId" name="pcid">
-      <div id="replacePcIdWrapper" class="hidden">
-        <label class="label">PC ID</label>
-        <input type="text" id="replacePcIdInput" class="input" placeholder="Enter PC ID (e.g., 123)">
+
+      <div class="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+        <div>
+          <p class="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Replacing part for</p>
+          <p id="replacePcName" class="text-sm font-extrabold text-slate-900">Loading PC…</p>
+        </div>
+        <div>
+          <p class="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Serial</p>
+          <p id="replacePcSerial" class="text-sm font-semibold text-slate-600">—</p>
+        </div>
       </div>
 
-      <div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div class="rp-field">
-            <label class="label">Monitor</label>
-            <input type="text" id="new-monitor" class="input rp-input" placeholder="">
-            <div class="rp-suggestions" id="sug-monitor" aria-hidden="true"></div>
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label for="replacePartSelect" class="label mb-1.5 block text-xs uppercase tracking-wide text-slate-500">1. Component to replace</label>
+          <select id="replacePartSelect" class="rp-input"></select>
+          <p id="replaceCurrentPart" class="mt-1.5 min-h-[1.25rem] text-xs text-slate-500"></p>
+        </div>
+        <div>
+          <div class="mb-1.5 flex items-center justify-between gap-2">
+            <label for="replaceInventorySelect" class="label text-xs uppercase tracking-wide text-slate-500">2. Available replacement</label>
+            <span id="replaceAvailableCount" class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700 ring-1 ring-emerald-100">0 available</span>
           </div>
-          <div class="rp-field">
-            <label class="label">Motherboard</label>
-            <input type="text" id="new-motherboard" class="input rp-input" placeholder="">
-            <div class="rp-suggestions" id="sug-motherboard" aria-hidden="true"></div>
+          <input type="text" id="replacePartSearch" class="rp-input mb-2" placeholder="Search item, brand, or serial…" autocomplete="off" disabled>
+          <select id="replaceInventorySelect" class="rp-input" disabled></select>
+          <div id="replaceSelectedDetails" class="mt-2 hidden rounded-xl border border-indigo-100 bg-indigo-50/60 px-3 py-2">
+            <p id="replaceSelectedTitle" class="text-xs font-extrabold text-indigo-900"></p>
+            <p id="replaceSelectedMeta" class="mt-0.5 text-[11px] text-indigo-700/80"></p>
           </div>
-          <div class="rp-field">
-            <label class="label">RAM</label>
-            <input type="text" id="new-ram" class="input rp-input" placeholder="">
-            <div class="rp-suggestions" id="sug-ram" aria-hidden="true"></div>
-          </div>
-          <div class="rp-field">
-            <label class="label">Storage</label>
-            <input type="text" id="new-storage" class="input rp-input" placeholder="">
-            <div class="rp-suggestions" id="sug-storage" aria-hidden="true"></div>
-          </div>
-          <div class="rp-field">
-            <label class="label">GPU</label>
-            <input type="text" id="new-gpu" class="input rp-input" placeholder="">
-            <div class="rp-suggestions" id="sug-gpu" aria-hidden="true"></div>
-          </div>
-          <div class="rp-field">
-            <label class="label">PSU</label>
-            <input type="text" id="new-psu" class="input rp-input" placeholder="">
-            <div class="rp-suggestions" id="sug-psu" aria-hidden="true"></div>
-          </div>
-          <div class="rp-field">
-            <label class="label">Casing</label>
-            <input type="text" id="new-casing" class="input rp-input" placeholder="">
-            <div class="rp-suggestions" id="sug-casing" aria-hidden="true"></div>
-          </div>
-          <div class="rp-field">
-            <label class="label">Mouse</label>
-            <input type="text" id="new-mouse" class="input rp-input" placeholder="">
-            <div class="rp-suggestions" id="sug-mouse" aria-hidden="true"></div>
-          </div>
-          <div class="rp-field">
-            <label class="label">Keyboard</label>
-            <input type="text" id="new-keyboard" class="input rp-input" placeholder="">
-            <div class="rp-suggestions" id="sug-keyboard" aria-hidden="true"></div>
-          </div>
-          <div class="rp-field">
-            <label class="label">Other Parts</label>
-            <input type="text" id="new-other_parts" class="input rp-input" placeholder="">
-            <div class="rp-suggestions" id="sug-other_parts" aria-hidden="true"></div>
+          <div id="replaceInventoryEmpty" class="rp-empty mt-2 hidden">
+            <p class="text-xs font-extrabold text-slate-700">No available unit for this part</p>
+            <p class="mt-1 text-[11px] text-slate-500">Add or release an inventory item with status <span class="font-bold">Available</span>, then reopen this dialog.</p>
+            <a id="replaceInventoryEmptyLink" href="/inventory/components" class="mt-2 inline-flex items-center gap-1 text-[11px] font-extrabold text-blue-600 hover:text-blue-700">
+              <i data-lucide="external-link" class="h-3 w-3"></i> Open inventory
+            </a>
           </div>
         </div>
       </div>
-      <label class="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 cursor-pointer">
-        <input type="checkbox" id="replaceMarkDamaged" class="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500">
-        <span class="text-sm text-gray-700">
-          <span class="font-semibold text-gray-900">Mark removed part as damaged</span>
-          <span class="block text-xs text-gray-500 mt-0.5">
-            Tick this only when the part being replaced is damaged. Otherwise the old part returns to Manage Item as Available.
-          </span>
-        </span>
-      </label>
-      <div class="flex justify-end gap-3 pt-4">
-        <button type="button" onclick="closeReplacePartModal()" class="btn-gray rp-btn">Cancel</button>
-        <button type="submit" class="btn-blue rp-btn"><i data-lucide="save" class="w-4 h-4"></i> Replace</button>
+
+      <fieldset>
+        <legend class="label mb-2 text-xs uppercase tracking-wide text-slate-500">3. Status of the removed part</legend>
+        <div id="replaceRemovedStatusGroup" class="grid gap-2 sm:grid-cols-2">
+          <label class="rp-status-option is-selected">
+            <input type="radio" name="removed_status" value="Available" checked>
+            <span>
+              <span class="rp-status-title">Available</span>
+              <span class="rp-status-desc">Return it to stock and make it selectable again.</span>
+            </span>
+          </label>
+          <label class="rp-status-option">
+            <input type="radio" name="removed_status" value="Needs Fixing">
+            <span>
+              <span class="rp-status-title">Needs Fixing</span>
+              <span class="rp-status-desc">Keep it in inventory until it can be repaired.</span>
+            </span>
+          </label>
+          <label class="rp-status-option">
+            <input type="radio" name="removed_status" value="Defective">
+            <span>
+              <span class="rp-status-title">Defective</span>
+              <span class="rp-status-desc">Record it as faulty but still physically on hand.</span>
+            </span>
+          </label>
+          <label class="rp-status-option">
+            <input type="radio" name="removed_status" value="For Disposal">
+            <span>
+              <span class="rp-status-title">For Disposal</span>
+              <span class="rp-status-desc">Mark it for disposal while keeping its record.</span>
+            </span>
+          </label>
+        </div>
+      </fieldset>
+
+      <div id="replacePartWarning" class="hidden rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+        <p class="font-extrabold">No old part is recorded for this component.</p>
+        <p class="mt-0.5">The replacement will still be assigned, but there is no inventory row to update for the removed part.</p>
+      </div>
+
+      <div id="replacePartError" class="hidden rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700" role="alert"></div>
+
+      <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+        <p class="max-w-md text-[11px] leading-relaxed text-slate-500">
+          The replacement unit is locked to this PC and marked <span class="font-bold text-slate-700">IN USE</span>. A unit already assigned elsewhere cannot be selected.
+        </p>
+        <div class="flex gap-2">
+          <button type="button" onclick="closeReplacePartModal()" class="btn-gray rp-btn">Cancel</button>
+          <button type="submit" id="replaceSubmitBtn" class="btn-blue rp-btn">
+            <i data-lucide="shield-check" class="h-4 w-4"></i>
+            <span id="replaceSubmitLabel">Confirm Replacement</span>
+            <i id="replaceSubmitSpinner" data-lucide="loader-2" class="hidden h-4 w-4 animate-spin"></i>
+          </button>
+        </div>
       </div>
     </form>
   </div>
@@ -479,7 +526,6 @@ async function openPcModal(pcData = null) {
   const form = document.getElementById('pcForm');
   const submitBtn = document.getElementById('modalSubmitBtn');
   const departmentSelect = document.getElementById('modalDepartment');
-  const res = await fetch('/notifications/get_notifications');
 
   // Reset form first
   form.reset();

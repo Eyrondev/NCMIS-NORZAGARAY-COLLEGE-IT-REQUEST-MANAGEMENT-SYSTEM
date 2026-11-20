@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ category.title }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
+    :root { --inv-radius: 14px; }
+
+    .inv-card {
+      border: 1px solid #e2e8f0;
+      border-radius: var(--inv-radius);
+      background: #ffffff;
+      box-shadow: 0 16px 32px -28px rgba(15, 23, 42, 0.5);
+    }
+
+    .inv-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: #eef2ff;
+      color: #3730a3;
+      font-size: 0.68rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      padding: 0.72rem 0.85rem;
+      border-bottom: 1px solid #dbe3f4;
+      text-align: left;
+    }
+
+    .inv-table tbody td {
+      padding: 0.72rem 0.85rem;
+      border-bottom: 1px solid #eef2f7;
+      font-size: 0.8rem;
+      color: #334155;
+      vertical-align: middle;
+    }
+
+    .inv-table tbody tr:nth-child(even) { background: #fbfcff; }
+    .inv-table tbody tr:hover { background: #f3f7ff; }
+
+    .filter-label {
+      display: block;
+      margin-bottom: 0.32rem;
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #64748b;
+    }
+
+    .filter-input {
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 0.7rem;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      padding: 0.58rem 0.72rem;
+      font-size: 0.8rem;
+      color: #0f172a;
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .filter-input:focus {
+      border-color: #93c5fd;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+    }
+
+    .inv-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.42rem;
+      border-radius: 0.7rem;
+      border: 1px solid transparent;
+      padding: 0.58rem 0.9rem;
+      font-size: 0.76rem;
+      font-weight: 800;
+      transition: transform 0.14s ease, box-shadow 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+      white-space: nowrap;
+    }
+
+    .inv-btn:hover { transform: translateY(-1px); }
+    .inv-btn-primary { color: #ffffff; border-color: #1d4ed8; background: linear-gradient(140deg, #2563eb 0%, #4f46e5 60%, #4338ca 100%); box-shadow: 0 12px 22px -16px rgba(37, 99, 235, 0.75); }
+    .inv-btn-light { color: #334155; border-color: #cbd5e1; background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%); }
+    .inv-btn-light:hover { color: #1d4ed8; border-color: #bfdbfe; background: #eff6ff; }
+
+    .inv-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.24rem;
+      border-radius: 0.5rem;
+      padding: 0.32rem 0.5rem;
+      font-size: 0.68rem;
+      font-weight: 700;
+      transition: filter 0.14s ease, transform 0.14s ease;
+      white-space: nowrap;
+    }
+
+    .inv-action:hover { filter: brightness(1.05); transform: translateY(-1px); }
+    .inv-action-edit { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
+    .inv-action-check { color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; }
+    .inv-action-history { color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; }
+    .inv-action-replace { color: #4338ca; background: #eef2ff; border: 1px solid #c7d2fe; }
+    .inv-action-danger { color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; }
+
+    .stat-card {
+      position: relative;
+      overflow: hidden;
+      border-radius: var(--inv-radius);
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      padding: 0.95rem;
+      box-shadow: 0 14px 26px -24px rgba(15, 23, 42, 0.55);
+    }
+
+    .stat-card::after {
+      content: '';
+      position: absolute;
+      inset-inline: 0;
+      top: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--stat-from, #3b82f6), var(--stat-to, #6366f1));
+    }
+
+    .stat-icon {
+      width: 2.35rem;
+      height: 2.35rem;
+      border-radius: 0.75rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.28rem;
+      border: 1px solid transparent;
+      border-radius: 9999px;
+      padding: 0.18rem 0.54rem;
+      font-size: 0.66rem;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .status-available { color: #047857; background: #ecfdf5; border-color: #a7f3d0; }
+    .status-in-use { color: #0369a1; background: #f0f9ff; border-color: #bae6fd; }
+    .status-damaged { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+    .status-low-stock { color: #b45309; background: #fffbeb; border-color: #fde68a; }
+    .status-out-of-stock { color: #be123c; background: #fff1f2; border-color: #fecdd3; }
+    .status-inactive { color: #475569; background: #f8fafc; border-color: #e2e8f0; }
+    .status-needs-checking { color: #a16207; background: #fefce8; border-color: #fef08a; }
+    .status-needs-fixing { color: #b45309; background: #fffbeb; border-color: #fde68a; }
+    .status-defective { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+    .status-for-disposal { color: #9f1239; background: #fff1f2; border-color: #fecdd3; }
+    .status-neutral { color: #475569; background: #f8fafc; border-color: #e2e8f0; }
+
+    .report-breakdown table { width: 100%; border-collapse: collapse; }
+    .report-breakdown th {
+      padding: 0.55rem 0.6rem;
+      border-bottom: 1px solid #e2e8f0;
+      color: #64748b;
+      font-size: 0.65rem;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      text-align: left;
+    }
+    .report-breakdown td {
+      padding: 0.55rem 0.6rem;
+      border-bottom: 1px solid #f1f5f9;
+      font-size: 0.76rem;
+      color: #334155;
+    }
+
+    .report-bar {
+      height: 0.36rem;
+      border-radius: 9999px;
+      background: #e2e8f0;
+      overflow: hidden;
+      min-width: 5rem;
+    }
+    .report-bar > span {
+      display: block;
+      height: 100%;
+      border-radius: 9999px;
+      background: linear-gradient(90deg, #3b82f6, #6366f1);
+    }
+
+    details > summary { list-style: none; cursor: pointer; }
+    details > summary::-webkit-details-marker { display: none; }
+    details[open] .advanced-chevron { transform: rotate(180deg); }
+
+    @media (max-width: 767px) {
+      .inv-table thead { display: none; }
+      .inv-table tbody tr { display: block; border-bottom: 1px solid #e2e8f0; padding: 0.35rem 0; }
+      .inv-table tbody td { display: flex; justify-content: space-between; gap: 0.75rem; border-bottom: 1px dashed #eef2f7; text-align: right; }
+      .inv-table tbody td::before {
+        content: attr(data-label);
+        font-size: 0.66rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #64748b;
+        text-align: left;
+      }
+      .inv-table tbody td[data-label="Actions"] { justify-content: flex-end; flex-wrap: wrap; }
+      .inv-table tbody td[data-label="Actions"]::before { margin-right: auto; }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+  {% include 'sidebar.html' %}
+
+  {% set can_edit = is_admin == 1 or permissions.get('inventory', {}).get('edit', False) %}
+  {% set tone_map = {
+    'blue': ('#3b82f6', '#6366f1', 'bg-blue-50 text-blue-600 ring-blue-100'),
+    'emerald': ('#10b981', '#059669', 'bg-emerald-50 text-emerald-600 ring-emerald-100'),
+    'sky': ('#0ea5e9', '#0284c7', 'bg-sky-50 text-sky-600 ring-sky-100'),
+    'rose': ('#f43f5e', '#e11d48', 'bg-rose-50 text-rose-600 ring-rose-100'),
+    'amber': ('#f59e0b', '#d97706', 'bg-amber-50 text-amber-600 ring-amber-100'),
+    'indigo': ('#6366f1', '#4f46e5', 'bg-indigo-50 text-indigo-600 ring-indigo-100'),
+    'violet': ('#8b5cf6', '#7c3aed', 'bg-violet-50 text-violet-600 ring-violet-100'),
+    'green': ('#22c55e', '#16a34a', 'bg-green-50 text-green-600 ring-green-100'),
+    'teal': ('#14b8a6', '#0d9488', 'bg-teal-50 text-teal-600 ring-teal-100'),
+    'red': ('#ef4444', '#dc2626', 'bg-red-50 text-red-600 ring-red-100'),
+    'slate': ('#64748b', '#475569', 'bg-slate-100 text-slate-600 ring-slate-200')
+  } %}
+
+  {% macro status_pill(value) -%}
+    {%- set key = (value or '')|trim|lower -%}
+    <span class="status-pill
+      {% if key == 'available' %}status-available
+      {% elif key in ['in use', 'in used', 'in-used', 'inuse'] %}status-in-use
+      {% elif key in ['damaged', 'damage', 'unusable'] %}status-damaged
+      {% elif key == 'low stock' %}status-low-stock
+      {% elif key == 'out of stock' %}status-out-of-stock
+      {% elif key == 'inactive' %}status-inactive
+      {% elif key == 'needs checking' %}status-needs-checking
+      {% elif key == 'needs fixing' %}status-needs-fixing
+      {% elif key == 'defective' %}status-defective
+      {% elif key == 'for disposal' %}status-for-disposal
+      {% else %}status-neutral{% endif %}">{{ value or 'Unspecified' }}</span>
+  {%- endmacro %}
+
+  {% macro risk_pill(value) -%}
+    {%- set key = (value or '')|trim|lower -%}
+    <span class="status-pill
+      {% if key == 'low' %}status-available
+      {% elif key == 'medium' %}status-low-stock
+      {% elif key == 'high' %}status-damaged
+      {% else %}status-neutral{% endif %}">{{ value or 'Unspecified' }}</span>
+  {%- endmacro %}
+
+  <main class="min-h-screen px-4 py-6 transition-all duration-300 md:ml-64 md:px-6">
+    <div class="mx-auto max-w-[1600px] space-y-5">
+
+      <!-- HEADER -->
+      <header class="inv-card p-5">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div class="flex items-start gap-3">
+            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-600 ring-1 ring-blue-200">
+              <i data-lucide="{{ category.icon }}" class="h-6 w-6"></i>
+            </div>
+            <div>
+              <div class="flex flex-wrap items-center gap-2">
+                <p class="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-600">Inventory</p>
+                <span class="text-slate-300">/</span>
+                <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{{ category.singular }}</p>
+              </div>
+              <h1 class="mt-0.5 text-2xl font-extrabold tracking-tight text-slate-900">{{ category.title }}</h1>
+              <p class="mt-1 max-w-3xl text-sm text-slate-500">{{ category.description }}</p>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            {% if can_edit %}
+            <button type="button" onclick="{{ category.add_action }}" class="inv-btn inv-btn-primary">
+              <i data-lucide="plus-circle" class="h-4 w-4"></i> Add {{ category.singular }}
+            </button>
+            {% endif %}
+            <a href="{{ request.path }}" class="inv-btn inv-btn-light">
+              <i data-lucide="refresh-cw" class="h-4 w-4"></i> Refresh
+            </a>
+            <button type="button" onclick="downloadCategoryCsv()" class="inv-btn inv-btn-light">
+              <i data-lucide="download" class="h-4 w-4"></i> Export CSV
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- CATEGORY-ONLY STATISTICS -->
+      <section class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+        {% for card in stat_cards %}
+        {% set tone = tone_map.get(card.tone, tone_map['slate']) %}
+        <article class="stat-card" style="--stat-from: {{ tone[0] }}; --stat-to: {{ tone[1] }};">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <p class="truncate text-[10px] font-extrabold uppercase tracking-[0.1em] text-slate-500">{{ card.label }}</p>
+              <p class="mt-1.5 truncate text-2xl font-extrabold leading-none text-slate-900">{{ card.value }}</p>
+            </div>
+            <span class="stat-icon {{ tone[2] }} ring-1">
+              <i data-lucide="{{ card.icon }}" class="h-4 w-4"></i>
+            </span>
+          </div>
+        </article>
+        {% endfor %}
+      </section>
+
+      <!-- FILTERS + SEARCH -->
+      <section class="inv-card p-4">
+        {% set has_advanced = filters.brand_model or filters.accountable or filters.date_from or filters.date_to %}
+        <form id="categoryFilterForm" method="get" action="{{ reset_url }}" class="space-y-3">
+          <input type="hidden" name="per_page" value="{{ per_page }}">
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div class="sm:col-span-2 xl:col-span-1">
+              <label for="categorySearch" class="filter-label">Search</label>
+              <div class="relative">
+                <i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"></i>
+                <input id="categorySearch" name="search" type="search" value="{{ filters.search }}" placeholder="Search {{ category.title|lower }}..."
+                  class="filter-input pl-9">
+              </div>
+            </div>
+
+            <div>
+              <label for="categoryStatus" class="filter-label">Status</label>
+              <select id="categoryStatus" name="status" class="filter-input" data-auto-submit>
+                <option value="">All statuses</option>
+                {% for option in status_options %}
+                <option value="{{ option }}" {% if filters.status|lower == option|lower %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div>
+              <label for="categoryDepartment" class="filter-label">Office / Facility</label>
+              <select id="categoryDepartment" name="department_id" class="filter-input" data-auto-submit>
+                <option value="">All offices</option>
+                {% for department in departments %}
+                <option value="{{ department.department_id }}" {% if filters.department_id|string == department.department_id|string %}selected{% endif %}>{{ department.department_name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div class="flex items-end gap-2">
+              <button type="submit" class="inv-btn inv-btn-primary flex-1">
+                <i data-lucide="sliders-horizontal" class="h-4 w-4"></i> Apply Filters
+              </button>
+              <a href="{{ reset_url }}" class="inv-btn inv-btn-light" title="Clear filters">
+                <i data-lucide="rotate-ccw" class="h-4 w-4"></i>
+              </a>
+            </div>
+          </div>
+
+          <details {% if has_advanced %}open{% endif %} class="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2">
+            <summary class="flex items-center justify-between gap-2 text-xs font-bold text-slate-600">
+              <span class="inline-flex items-center gap-2"><i data-lucide="filter" class="h-3.5 w-3.5"></i> More filters</span>
+              <i data-lucide="chevron-down" class="advanced-chevron h-4 w-4 transition-transform"></i>
+            </summary>
+            <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div>
+                <label for="categoryBrand" class="filter-label">Brand / Model</label>
+                <input id="categoryBrand" name="brand_model" type="text" value="{{ filters.brand_model }}" placeholder="e.g. Dell, HP"
+                  class="filter-input">
+              </div>
+              <div>
+                <label for="categoryAccountable" class="filter-label">Accountable Person</label>
+                <input id="categoryAccountable" name="accountable" type="text" value="{{ filters.accountable }}" placeholder="Name"
+                  class="filter-input">
+              </div>
+              <div>
+                <label for="categoryDateFrom" class="filter-label">Acquired From</label>
+                <input id="categoryDateFrom" name="date_from" type="date" value="{{ filters.date_from }}" class="filter-input">
+              </div>
+              <div>
+                <label for="categoryDateTo" class="filter-label">Acquired To</label>
+                <input id="categoryDateTo" name="date_to" type="date" value="{{ filters.date_to }}" class="filter-input">
+              </div>
+            </div>
+          </details>
+        </form>
+      </section>
+
+      <!-- CATEGORY TABLE -->
+      <section class="inv-card overflow-hidden">
+        <div class="flex flex-col gap-2 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="flex items-center gap-2">
+            <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600 ring-1 ring-blue-100">
+              <i data-lucide="{{ category.icon }}" class="h-4 w-4"></i>
+            </span>
+            <div>
+              <h2 class="text-sm font-extrabold text-slate-900">{{ category.singular }} records</h2>
+              <p class="text-[11px] text-slate-500">
+                {% if total_items %}
+                Showing {{ pagination.first_index }}&ndash;{{ pagination.last_index }} of {{ "{:,}".format(total_items) }} record{{ '' if total_items == 1 else 's' }}
+                {% else %}
+                No records match the current filters
+                {% endif %}
+              </p>
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
+            <span class="rounded-full bg-slate-100 px-2.5 py-1">Page {{ pagination.page }} / {{ pagination.total_pages }}</span>
+            <span class="rounded-full bg-slate-100 px-2.5 py-1">{{ category.title }}</span>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table id="categoryTable" class="inv-table w-full min-w-[940px]" data-category="{{ category.title }}">
+            <thead>
+              {% if category.kind == 'pc' %}
+              <tr>
+                <th>ID</th>
+                <th>PC Name</th>
+                <th>Office / Facility</th>
+                <th>Location</th>
+                <th>Accountable</th>
+                <th>Serial No</th>
+                <th>Acquired</th>
+                <th>Cost</th>
+                <th>Status</th>
+                <th>Risk / Health</th>
+                <th class="no-export">Actions</th>
+              </tr>
+              {% elif category.kind == 'device' %}
+              <tr>
+                <th>ID</th>
+                <th>Item</th>
+                <th>Brand / Model</th>
+                <th>Office / Facility</th>
+                <th>Accountable</th>
+                <th>Serial No</th>
+                <th>Qty</th>
+                <th>Acquired</th>
+                <th>Cost</th>
+                <th>Status</th>
+                <th class="no-export">Actions</th>
+              </tr>
+              {% else %}
+              <tr>
+                <th>ID</th>
+                <th>Item</th>
+                <th>Category</th>
+                <th>Brand</th>
+                <th>Office / Facility</th>
+                <th>Quantity</th>
+                <th>Location</th>
+                <th>Status</th>
+                <th>Date Added</th>
+                <th class="no-export">Actions</th>
+              </tr>
+              {% endif %}
+            </thead>
+            <tbody>
+              {% if category.kind == 'pc' %}
+                {% for pc in pc_list %}
+                {% set pc_status_key = (pc.status or '')|trim|lower %}
+                {% set pc_risk = 'High' if pc_status_key in ['damaged', 'damage', 'unusable'] else (pc.risk_level or 'Unspecified') %}
+                {% set pc_health = pc.health_score if pc.health_score is not none else '--' %}
+                <tr>
+                  <td data-label="ID" class="font-bold text-slate-700">#{{ pc.pcid }}</td>
+                  <td data-label="PC Name">
+                    <p class="font-bold text-slate-900">{{ pc.pcname or 'Unnamed PC' }}</p>
+                    <p class="text-[11px] text-slate-400">{{ pc.department_name or 'No office assigned' }}</p>
+                  </td>
+                  <td data-label="Office / Facility">{{ pc.department_name or '--' }}</td>
+                  <td data-label="Location">{{ pc.location or '--' }}</td>
+                  <td data-label="Accountable">{{ pc.accountable or '--' }}</td>
+                  <td data-label="Serial No">
+                    <p class="font-medium text-slate-700">{{ pc.serial_no or '--' }}</p>
+                    <p class="text-[11px] text-slate-400">{{ pc.municipal_serial_no or '' }}</p>
+                  </td>
+                  <td data-label="Acquired">{{ pc.date_acquired or '--' }}</td>
+                  <td data-label="Cost">&#8369;{{ "{:,.2f}".format(pc.acquisition_cost or 0) }}</td>
+                  <td data-label="Status">{{ status_pill(pc.status) }}</td>
+                  <td data-label="Risk / Health">
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      {{ risk_pill(pc_risk) }}
+                      <span class="text-[11px] font-semibold text-slate-500">Health {{ pc_health }}</span>
+                    </div>
+                  </td>
+                  <td data-label="Actions" class="no-export">
+                    <div class="flex flex-wrap items-center gap-1">
+                      {% if can_edit %}
+                      <button type="button" onclick="openPcModalById({{ pc.pcid }})" class="inv-action inv-action-edit">
+                        <i data-lucide="pencil" class="h-3 w-3"></i> Edit
+                      </button>
+                      <button type="button" onclick="openReplacePartModal({{ pc.pcid }}, this)" class="inv-action inv-action-replace">
+                        <i data-lucide="repeat" class="h-3 w-3"></i> Replace Part
+                      </button>
+                      <button type="button" onclick="markPcChecked({{ pc.pcid }})" class="inv-action inv-action-check">
+                        <i data-lucide="check-square" class="h-3 w-3"></i> Check
+                      </button>
+                      {% endif %}
+                      <button type="button" onclick="openMaintenanceLog({{ pc.pcid }}, 'PC')" class="inv-action inv-action-history">
+                        <i data-lucide="clock-3" class="h-3 w-3"></i> History
+                      </button>
+                      {% if can_edit %}
+                      <button type="button" onclick="openDeleteModal('{{ url_for('manage_pc_bp.delete_pc', pcid=pc.pcid) }}')" class="inv-action inv-action-danger">
+                        <i data-lucide="archive" class="h-3 w-3"></i> Archive
+                      </button>
+                      {% endif %}
+                    </div>
+                  </td>
+                </tr>
+                {% endfor %}
+                {% if not pc_list %}
+                <tr>
+                  <td colspan="11" class="px-4 py-12 text-center">
+                    <div class="mx-auto flex max-w-sm flex-col items-center gap-2">
+                      <span class="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-500 ring-1 ring-blue-100">
+                        <i data-lucide="cpu" class="h-6 w-6"></i>
+                      </span>
+                      <p class="text-sm font-extrabold text-slate-800">{{ category.empty_title }}</p>
+                      <p class="text-xs text-slate-500">{{ category.empty_message }}</p>
+                    </div>
+                  </td>
+                </tr>
+                {% endif %}
+
+              {% elif category.kind == 'device' %}
+                {% for item in item_list %}
+                {% set item_status_key = (item.status or '')|trim|lower %}
+                {% set item_risk = 'High' if item_status_key in ['damaged', 'damage', 'unusable'] else (item.risk_level or 'Unspecified') %}
+                <tr>
+                  <td data-label="ID" class="font-bold text-slate-700">#{{ item.accession_id }}</td>
+                  <td data-label="Item">
+                    <p class="font-bold text-slate-900">{{ item.item_name or 'Unnamed item' }}</p>
+                    <p class="text-[11px] text-slate-400">{{ item.device_type or 'Unclassified' }}</p>
+                  </td>
+                  <td data-label="Brand / Model">{{ item.brand_model or '--' }}</td>
+                  <td data-label="Office / Facility">{{ item.department_name or '--' }}</td>
+                  <td data-label="Accountable">{{ item.accountable or '--' }}</td>
+                  <td data-label="Serial No">
+                    <p class="font-medium text-slate-700">{{ item.serial_no or '--' }}</p>
+                    <p class="text-[11px] text-slate-400">{{ item.municipal_serial_no or '' }}</p>
+                  </td>
+                  <td data-label="Qty" class="font-bold text-slate-700">{{ item.quantity or 1 }}</td>
+                  <td data-label="Acquired">{{ item.date_acquired or '--' }}</td>
+                  <td data-label="Cost">&#8369;{{ "{:,.2f}".format(item.acquisition_cost or 0) }}</td>
+                  <td data-label="Status">{{ status_pill(item.status) }}</td>
+                  <td data-label="Actions" class="no-export">
+                    <div class="flex flex-wrap items-center gap-1">
+                      {% if can_edit %}
+                      <button type="button" onclick="openItemModalById({{ item.accession_id }})" class="inv-action inv-action-edit">
+                        <i data-lucide="pencil" class="h-3 w-3"></i> Edit
+                      </button>
+                      <button type="button" onclick="markChecked('device', {{ item.accession_id }})" class="inv-action inv-action-check">
+                        <i data-lucide="check-square" class="h-3 w-3"></i> Check
+                      </button>
+                      {% endif %}
+                      <button type="button" onclick="openMaintenanceLog({{ item.accession_id }}, 'DEVICE')" class="inv-action inv-action-history">
+                        <i data-lucide="clock-3" class="h-3 w-3"></i> History
+                      </button>
+                      {% if can_edit %}
+                      <button type="button" onclick="archiveDevice({{ item.accession_id }}, {{ item.item_name|tojson|forceescape }})" class="inv-action inv-action-danger">
+                        <i data-lucide="archive" class="h-3 w-3"></i> Archive
+                      </button>
+                      {% endif %}
+                    </div>
+                  </td>
+                </tr>
+                {% endfor %}
+                {% if not item_list %}
+                <tr>
+                  <td colspan="11" class="px-4 py-12 text-center">
+                    <div class="mx-auto flex max-w-sm flex-col items-center gap-2">
+                      <span class="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-500 ring-1 ring-indigo-100">
+                        <i data-lucide="{{ category.icon }}" class="h-6 w-6"></i>
+                      </span>
+                      <p class="text-sm font-extrabold text-slate-800">{{ category.empty_title }}</p>
+                      <p class="text-xs text-slate-500">{{ category.empty_message }}</p>
+                    </div>
+                  </td>
+                </tr>
+                {% endif %}
+
+              {% else %}
+                {% for item in consumable_list %}
+                <tr>
+                  <td data-label="ID" class="font-bold text-slate-700">#{{ item.accession_id }}</td>
+                  <td data-label="Item">
+                    <p class="font-bold text-slate-900">{{ item.item_name or 'Unnamed consumable' }}</p>
+                    <p class="text-[11px] text-slate-400">{{ item.description or 'Consumable stock item' }}</p>
+                  </td>
+                  <td data-label="Category">{{ item.category or '--' }}</td>
+                  <td data-label="Brand">{{ item.brand or '--' }}</td>
+                  <td data-label="Office / Facility">{{ item.department_name or '--' }}</td>
+                  <td data-label="Quantity">
+                    <span class="font-extrabold text-slate-900">{{ item.quantity or 0 }}</span>
+                    <span class="text-[11px] text-slate-400">{{ item.unit or '' }}</span>
+                  </td>
+                  <td data-label="Location">{{ item.location or '--' }}</td>
+                  <td data-label="Status">{{ status_pill(item.status) }}</td>
+                  <td data-label="Date Added">{{ item.date_added or '--' }}</td>
+                  <td data-label="Actions" class="no-export">
+                    <div class="flex flex-wrap items-center gap-1">
+                      {% if can_edit %}
+                      <button type="button" onclick="openConsumableModalById({{ item.accession_id }})" class="inv-action inv-action-edit">
+                        <i data-lucide="pencil" class="h-3 w-3"></i> Edit
+                      </button>
+                      <button type="button" onclick="archiveConsumable({{ item.accession_id }}, {{ item.item_name|tojson|forceescape }})" class="inv-action inv-action-danger">
+                        <i data-lucide="archive" class="h-3 w-3"></i> Archive
+                      </button>
+                      {% endif %}
+                    </div>
+                  </td>
+                </tr>
+                {% endfor %}
+                {% if not consumable_list %}
+                <tr>
+                  <td colspan="10" class="px-4 py-12 text-center">
+                    <div class="mx-auto flex max-w-sm flex-col items-center gap-2">
+                      <span class="flex h-12 w-12 items-center justify-center rounded-2xl bg-green-50 text-green-500 ring-1 ring-green-100">
+                        <i data-lucide="package" class="h-6 w-6"></i>
+                      </span>
+                      <p class="text-sm font-extrabold text-slate-800">{{ category.empty_title }}</p>
+                      <p class="text-xs text-slate-500">{{ category.empty_message }}</p>
+                    </div>
+                  </td>
+                </tr>
+                {% endif %}
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- PAGINATION -->
+        <div class="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/70 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+          <div class="text-[11px] font-semibold text-slate-500">
+            {% if total_items %}
+            Showing {{ pagination.first_index }}&ndash;{{ pagination.last_index }} of {{ "{:,}".format(total_items) }} record{{ '' if total_items == 1 else 's' }}
+            {% else %}
+            0 records
+            {% endif %}
+          </div>
+
+          <nav class="flex flex-wrap items-center justify-center gap-1.5" aria-label="Category pagination">
+            {% if pagination.prev_url %}
+            <a href="{{ pagination.prev_url }}" class="inv-btn inv-btn-light !px-2.5 !py-1.5" aria-label="Previous page">
+              <i data-lucide="chevron-left" class="h-4 w-4"></i>
+            </a>
+            {% else %}
+            <span class="inv-btn inv-btn-light !px-2.5 !py-1.5 opacity-40">
+              <i data-lucide="chevron-left" class="h-4 w-4"></i>
+            </span>
+            {% endif %}
+
+            {% for page_link in pagination.pages %}
+              {% if page_link.active %}
+              <span class="inv-btn inv-btn-primary !px-3 !py-1.5">{{ page_link.number }}</span>
+              {% else %}
+              <a href="{{ page_link.url }}" class="inv-btn inv-btn-light !px-3 !py-1.5">{{ page_link.number }}</a>
+              {% endif %}
+            {% endfor %}
+
+            {% if pagination.next_url %}
+            <a href="{{ pagination.next_url }}" class="inv-btn inv-btn-light !px-2.5 !py-1.5" aria-label="Next page">
+              <i data-lucide="chevron-right" class="h-4 w-4"></i>
+            </a>
+            {% else %}
+            <span class="inv-btn inv-btn-light !px-2.5 !py-1.5 opacity-40">
+              <i data-lucide="chevron-right" class="h-4 w-4"></i>
+            </span>
+            {% endif %}
+          </nav>
+
+          <form id="categoryPerPageForm" method="get" action="{{ reset_url }}" class="flex items-center gap-2">
+            {% for key, value in filter_hidden.items() %}
+            <input type="hidden" name="{{ key }}" value="{{ value }}">
+            {% endfor %}
+            <label for="categoryPerPage" class="text-[11px] font-bold uppercase tracking-wide text-slate-500">Show</label>
+            <select id="categoryPerPage" name="per_page" class="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 focus:border-blue-400 focus:outline-none">
+              {% for size in per_page_options %}
+              <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        </div>
+      </section>
+
+      <!-- CATEGORY-ONLY REPORT -->
+      <section id="categoryReportPanel" class="inv-card p-4 sm:p-5">
+        <div class="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
+          <div class="flex items-start gap-3">
+            <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
+              <i data-lucide="clipboard-list" class="h-5 w-5"></i>
+            </span>
+            <div>
+              <h2 class="text-lg font-extrabold text-slate-900">{{ category.title }} Report</h2>
+              <p class="text-xs text-slate-500">Category-only summary and breakdowns. Generated {{ report.generated_at }}.</p>
+            </div>
+          </div>
+          <button type="button" onclick="downloadCategoryCsv()" class="inv-btn inv-btn-light">
+            <i data-lucide="download" class="h-4 w-4"></i> Export Report CSV
+          </button>
+        </div>
+
+        <div id="categoryReportSummary" class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          {% for metric in report.summary %}
+          <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5" data-report-metric data-label="{{ metric.label }}" data-value="{% if metric.currency %}{{ metric.value }}{% else %}{{ metric.value }}{% endif %}">
+            <p class="text-[10px] font-extrabold uppercase tracking-[0.08em] text-slate-500">{{ metric.label }}</p>
+            <p class="mt-1 text-xl font-extrabold text-slate-900">
+              {% if metric.currency %}&#8369;{{ "{:,.2f}".format(metric.value) }}{% else %}{{ "{:,}".format(metric.value) }}{% endif %}
+            </p>
+          </div>
+          {% endfor %}
+        </div>
+
+        <div id="categoryReportBreakdowns" class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+          {% for breakdown in report.breakdowns %}
+          <section class="report-breakdown rounded-xl border border-slate-200 bg-white p-3" data-report-title="{{ breakdown.title }}">
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <h3 class="text-sm font-extrabold text-slate-800">{{ breakdown.title }}</h3>
+              <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">{{ breakdown.rows|length }} groups</span>
+            </div>
+            {% if breakdown.rows %}
+            <div class="overflow-x-auto">
+              <table class="min-w-full">
+                <thead>
+                  <tr>
+                    <th>Label</th>
+                    <th>Records</th>
+                    {% if breakdown.show_units %}<th>Units</th>{% endif %}
+                    {% if breakdown.show_value %}<th>Value</th>{% endif %}
+                    <th>Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in breakdown.rows %}
+                  <tr>
+                    <td class="font-semibold text-slate-700">{{ row.label }}</td>
+                    <td>{{ row.count }}</td>
+                    {% if breakdown.show_units %}<td>{{ row.units }}</td>{% endif %}
+                    {% if breakdown.show_value %}<td>&#8369;{{ "{:,.2f}".format(row.value) }}</td>{% endif %}
+                    <td>
+                      <div class="flex items-center gap-2">
+                        <div class="report-bar flex-1"><span style="width: {{ row.percent }}%;"></span></div>
+                        <span class="w-10 text-right text-[11px] font-bold text-slate-500">{{ row.percent }}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+            <p class="rounded-lg bg-slate-50 px-3 py-4 text-center text-xs text-slate-500">No breakdown data available.</p>
+            {% endif %}
+          </section>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+  </main>
+
+  {% include 'partials/inventory_feedback.html' %}
+  {% include 'delete_modal.html' %}
+
+  <script>
+    window.INVENTORY_DEFAULT_DEVICE_TYPE = {{ category.default_device_type|tojson }};
+    window.INVENTORY_CATEGORY_KEY = {{ category.key|tojson }};
+  </script>
+
+  {% if category.kind == 'pc' %}
+  {% include 'pceditmodal.html' %}
+  <script src="{{ url_for('static', filename='js/manage_pc.js') }}?v=20260414-1"></script>
+  <script src="{{ url_for('static', filename='js/replace_part.js') }}?v=20261117-1"></script>
+  {% elif category.kind == 'device' %}
+  {% include 'itemeditmodal.html' %}
+  <script src="{{ url_for('static', filename='js/manage_device.js') }}?v=20260403-15"></script>
+  {% else %}
+  {% include 'consumableeditmodal.html' %}
+  <script src="{{ url_for('static', filename='js/manage_consumable.js') }}?v=20260404-2"></script>
+  {% endif %}
+
+  <script src="{{ url_for('static', filename='js/inventory_category.js') }}?v=20261115-1"></script>
+</body>
+</html>

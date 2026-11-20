@@ -100,16 +100,11 @@
           </div>
         </div>
 
-        <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
           <div class="md-stat border-slate-200 bg-slate-50">
             <div><p class="text-[11px] font-bold uppercase tracking-wide text-slate-500">Total Devices</p>
               <p class="text-2xl font-extrabold text-slate-900">{{ stats.total }}</p></div>
             <i data-lucide="hard-drive" class="h-7 w-7 text-slate-400"></i>
-          </div>
-          <div class="md-stat border-blue-200 bg-blue-50">
-            <div><p class="text-[11px] font-bold uppercase tracking-wide text-blue-600">In Use</p>
-              <p class="text-2xl font-extrabold text-blue-700">{{ stats.in_use }}</p></div>
-            <i data-lucide="plug" class="h-7 w-7 text-blue-400"></i>
           </div>
           <div class="md-stat border-green-200 bg-green-50">
             <div><p class="text-[11px] font-bold uppercase tracking-wide text-green-600">Available</p>
@@ -117,14 +112,24 @@
             <i data-lucide="check-circle-2" class="h-7 w-7 text-green-400"></i>
           </div>
           <div class="md-stat border-red-200 bg-red-50">
-            <div><p class="text-[11px] font-bold uppercase tracking-wide text-red-600">Damaged</p>
+            <div><p class="text-[11px] font-bold uppercase tracking-wide text-red-600">Needs Fixing</p>
               <p class="text-2xl font-extrabold text-red-700">{{ stats.damaged }}</p></div>
             <i data-lucide="alert-triangle" class="h-7 w-7 text-red-400"></i>
           </div>
           <div class="md-stat border-amber-200 bg-amber-50">
-            <div><p class="text-[11px] font-bold uppercase tracking-wide text-amber-600">High Risk</p>
-              <p class="text-2xl font-extrabold text-amber-700">{{ stats.high_risk }}</p></div>
-            <i data-lucide="shield-alert" class="h-7 w-7 text-amber-400"></i>
+            <div><p class="text-[11px] font-bold uppercase tracking-wide text-amber-600">Under Maintenance</p>
+              <p class="text-2xl font-extrabold text-amber-700">{{ stats.maintenance_due }}</p></div>
+            <i data-lucide="wrench" class="h-7 w-7 text-amber-400"></i>
+          </div>
+          <div class="md-stat border-blue-200 bg-blue-50">
+            <div><p class="text-[11px] font-bold uppercase tracking-wide text-blue-600">Borrowed</p>
+              <p class="text-2xl font-extrabold text-blue-700">{{ stats.in_use }}</p></div>
+            <i data-lucide="plug" class="h-7 w-7 text-blue-400"></i>
+          </div>
+          <div class="md-stat border-indigo-200 bg-indigo-50">
+            <div><p class="text-[11px] font-bold uppercase tracking-wide text-indigo-600">Archived</p>
+              <p class="text-2xl font-extrabold text-indigo-700">{{ stats.archived }}</p></div>
+            <i data-lucide="archive" class="h-7 w-7 text-indigo-400"></i>
           </div>
         </div>
       </header>

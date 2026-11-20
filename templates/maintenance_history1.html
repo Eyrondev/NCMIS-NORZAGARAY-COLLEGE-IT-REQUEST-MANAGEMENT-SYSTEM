@@ -257,7 +257,7 @@
     /* ── Table ── */
     .mh-table {
       width: 100%;
-      min-width: 1100px;
+      min-width: 1560px;
       border-collapse: separate;
       border-spacing: 0;
       font-size: 0.875rem;
@@ -472,6 +472,23 @@
       color: #475569;
     }
 
+    /* ── Part / action detail ── */
+    .mh-part-cell {
+      max-width: 220px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      color: #475569;
+      font-size: 0.82rem;
+      line-height: 1.35;
+    }
+
+    .mh-action-sub {
+      margin-top: 0.28rem;
+      color: #94a3b8;
+      font-size: 0.7rem;
+      line-height: 1.2;
+    }
+
     /* ── Remarks ── */
     .mh-remarks {
       max-width: 280px;
@@ -538,6 +555,43 @@
       </div>
     </div>
 
+    <!-- MAINTENANCE STATS -->
+    <div class="grid grid-cols-2 gap-3 mb-4 lg:grid-cols-4">
+      <div class="rounded-xl border border-blue-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Total Records</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600"><i data-lucide="clipboard-list" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-2xl font-extrabold text-slate-900">{{ total_items }}</p>
+      </div>
+      <div class="rounded-xl border border-indigo-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Assets Serviced</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600"><i data-lucide="boxes" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-2xl font-extrabold text-slate-900">{{ stats.assets_serviced }}</p>
+      </div>
+      <div class="rounded-xl border border-red-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">High-Risk Outcomes</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600"><i data-lucide="shield-alert" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-2xl font-extrabold text-slate-900">{{ stats.high_risk_outcomes }}</p>
+      </div>
+      <div class="rounded-xl border border-emerald-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">This Month</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600"><i data-lucide="calendar-check" class="h-4 w-4"></i></span>
+        </div>
+        <p class="mt-2 text-2xl font-extrabold text-slate-900">{{ stats.this_month }}</p>
+      </div>
+    </div>
+
+    <div class="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+      <i data-lucide="lock" class="mt-0.5 h-4 w-4 shrink-0"></i>
+      <p><span class="font-semibold">Immutable audit trail.</span> Saved maintenance records cannot be edited or deleted. Log a new repair or replacement instead of changing history.</p>
+    </div>
+
     <div class="mb-4">
       <div class="quick-search-card p-3 sm:p-4">
         <label for="maintenanceQuickSearchInput" class="quick-search-label">
@@ -593,7 +647,7 @@
 
         <p id="maintenanceQuickSearchStatus" class="quick-search-status">Type to auto-filter current page.</p>
         <div class="mh-search-hint">
-          Use <code>column:value</code> to filter specific columns — e.g. <code>status:available</code>, <code>risk:high</code>, <code>type:pc</code>, <code>action:repair</code>, <code>performed_by:admin</code>
+          Use <code>column:value</code> to filter specific columns — e.g. <code>status:available</code>, <code>risk:high</code>, <code>type:pc</code>, <code>action:repair</code>, <code>technician:admin</code>, <code>part:motherboard</code>
         </div>
       </div>
     </div>
@@ -604,14 +658,18 @@
       <table class="mh-table">
         <thead>
           <tr>
-            <th>Date</th>
-            <th>Asset</th>
-            <th>Action</th>
-            <th>Old Status</th>
+            <th>Maintenance Date</th>
+            <th>Computer Name</th>
+            <th>Asset ID</th>
+            <th>Technician</th>
+            <th>Maintenance Type</th>
+            <th>Replaced Part</th>
+            <th>Previous Part</th>
+            <th>New Part</th>
+            <th>Previous Status</th>
             <th>New Status</th>
             <th>Risk</th>
             <th>Duration</th>
-            <th>Performed By</th>
             <th>Remarks</th>
           </tr>
         </thead>
@@ -619,7 +677,7 @@
         <tbody id="maintenance-history-tbody">
           {% if records|length == 0 %}
           <tr>
-            <td colspan="9" class="mh-empty-state">
+            <td colspan="13" class="mh-empty-state">
               <div class="mh-empty-icon"><i data-lucide="inbox" class="w-5 h-5"></i></div>
               <div class="mh-empty-title">No maintenance records found</div>
               <div class="mh-empty-sub">Records will appear here when maintenance actions are logged.</div>
@@ -635,21 +693,54 @@
 
             <td class="whitespace-nowrap">
               <span class="mh-asset-name">
-                {% if row.asset_type_key == 'PC' %}
-                  <span class="mh-asset-type mh-asset-type-pc">PC</span>{{ row.asset_name or ('#' ~ row.asset_id) }}
-                {% elif row.asset_type_key == 'DEVICE' %}
-                  <span class="mh-asset-type mh-asset-type-device">DEV</span>{{ row.asset_name or ('#' ~ row.asset_id) }}
-                {% else %}
-                  <span class="mh-asset-type mh-asset-type-other">{{ row.asset_type or 'AST' }}</span>#{{ row.asset_id }}
-                {% endif %}
+                {{ row.asset_name or row.computer_name or ('#' ~ row.asset_id) }}
               </span>
+            </td>
+
+            <td class="whitespace-nowrap">
+              {% if row.asset_type_key == 'PC' %}
+                <span class="mh-asset-type mh-asset-type-pc">PC</span>
+              {% elif row.asset_type_key == 'DEVICE' %}
+                <span class="mh-asset-type mh-asset-type-device">DEV</span>
+              {% else %}
+                <span class="mh-asset-type mh-asset-type-other">{{ row.asset_type or 'AST' }}</span>
+              {% endif %}
+              <span class="font-semibold text-slate-700">#{{ row.asset_id }}</span>
+              {% if row.asset_serial %}
+                <div class="text-xs text-slate-400" title="{{ row.asset_serial }}">SN: {{ row.asset_serial }}</div>
+              {% endif %}
+            </td>
+
+            <td class="whitespace-nowrap" style="color:#475569">
+              {{ row.technician or row.performed_by or '—' }}
             </td>
 
             <td>
               <span class="mh-chip mh-chip-action">
                 <span class="mh-chip-dot"></span>
-                {{ row.action }}
+                {{ row.maintenance_type or row.action }}
               </span>
+              {% if row.action and row.action != (row.maintenance_type or row.action) %}
+                <div class="mh-action-sub">{{ row.action }}</div>
+              {% endif %}
+            </td>
+
+            <td class="mh-part-cell">
+              {{ row.replaced_part or '—' }}
+            </td>
+
+            <td class="mh-part-cell" title="{{ row.previous_part or '' }}">
+              {{ row.previous_part or '—' }}
+              {% if row.previous_part_status %}
+                <div class="text-xs text-slate-400">Status: {{ row.previous_part_status }}</div>
+              {% endif %}
+            </td>
+
+            <td class="mh-part-cell" title="{{ row.new_part or '' }}">
+              {{ row.new_part or '—' }}
+              {% if row.new_part_status %}
+                <div class="text-xs text-slate-400">Status: {{ row.new_part_status }}</div>
+              {% endif %}
             </td>
 
             <td style="color:#64748b">
@@ -702,10 +793,6 @@
               {% else %}
                 <span style="color:#94a3b8">—</span>
               {% endif %}
-            </td>
-
-            <td class="whitespace-nowrap" style="color:#475569">
-              {{ row.performed_by or '—' }}
             </td>
 
             <td class="mh-remarks" title="{{ row.remarks or '' }}">
@@ -822,23 +909,40 @@
       // ── Column index mapping ──
       const COL_INDEX = {
         date: 0,
+        maintenance_date: 0,
+        computer: 1,
+        computer_name: 1,
         asset: 1,
-        action: 2,
-        old_status: 3,
-        oldstatus: 3,
-        new_status: 4,
-        newstatus: 4,
-        status: 4,
-        risk: 5,
-        duration: 6,
-        performed_by: 7,
-        performedby: 7,
-        by: 7,
-        remarks: 8
+        asset_name: 1,
+        asset_id: 2,
+        id: 2,
+        serial: 2,
+        technician: 3,
+        tech: 3,
+        performed_by: 3,
+        performedby: 3,
+        by: 3,
+        type: 4,
+        maintenance_type: 4,
+        action: 4,
+        replaced_part: 5,
+        part: 5,
+        previous_part: 6,
+        old_part: 6,
+        new_part: 7,
+        previous_status: 8,
+        old_status: 8,
+        oldstatus: 8,
+        new_status: 9,
+        newstatus: 9,
+        status: 9,
+        risk: 10,
+        duration: 11,
+        remarks: 12
       };
 
       // ── Alias map for type:pc / type:device ──
-      // These search the Asset column (index 1) for specific text
+      // These search the Asset ID column (index 2) for the asset type badge.
       const TYPE_ALIASES = {
         pc: ["PC"],
         device: ["DEV", "Device"]
@@ -870,8 +974,8 @@
             const colVal = cleanToken.substring(colonPos + 1).trim().toLowerCase();
 
             if (colKey === "type" && TYPE_ALIASES[colVal]) {
-              // type:pc / type:device → search asset column
-              columnFilters[1] = TYPE_ALIASES[colVal];
+              // type:pc / type:device → search asset id column
+              columnFilters[2] = TYPE_ALIASES[colVal];
             } else if (COL_INDEX[colKey] !== undefined) {
               columnFilters[COL_INDEX[colKey]] = [colVal];
             } else {
@@ -1053,7 +1157,7 @@
         if (hasSearchTerm && matchCount === 0) {
           const noMatchRow = document.createElement("tr");
           noMatchRow.id = "maintenance-quick-no-match-row";
-          noMatchRow.innerHTML = '<td colspan="9" class="mh-empty-state"><div class="mh-empty-icon"><i data-lucide="search-x" class="w-5 h-5"></i></div><div class="mh-empty-title">No matching records</div><div class="mh-empty-sub">Try a different search term or column filter.</div></td>';
+          noMatchRow.innerHTML = '<td colspan="13" class="mh-empty-state"><div class="mh-empty-icon"><i data-lucide="search-x" class="w-5 h-5"></i></div><div class="mh-empty-title">No matching records</div><div class="mh-empty-sub">Try a different search term or column filter.</div></td>';
           tbody.appendChild(noMatchRow);
           lucide.createIcons();
         }

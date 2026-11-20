@@ -194,6 +194,38 @@
       </div>
     </header>
 
+    <!-- REPORT STATS -->
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div class="rounded-xl border border-emerald-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Available Assets</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600"><i data-lucide="check-circle-2" class="h-4 w-4"></i></span>
+        </div>
+        <p id="reportStatTotal" class="mt-2 text-2xl font-extrabold text-slate-900">0</p>
+      </div>
+      <div class="rounded-xl border border-blue-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">PCs</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600"><i data-lucide="monitor" class="h-4 w-4"></i></span>
+        </div>
+        <p id="reportStatPcs" class="mt-2 text-2xl font-extrabold text-slate-900">0</p>
+      </div>
+      <div class="rounded-xl border border-indigo-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Devices</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600"><i data-lucide="hard-drive" class="h-4 w-4"></i></span>
+        </div>
+        <p id="reportStatDevices" class="mt-2 text-2xl font-extrabold text-slate-900">0</p>
+      </div>
+      <div class="rounded-xl border border-amber-100 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Available Value</p>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-600"><i data-lucide="wallet" class="h-4 w-4"></i></span>
+        </div>
+        <p id="reportStatValue" class="mt-2 text-lg font-extrabold text-slate-900">&#8369;0</p>
+      </div>
+    </div>
+
     <!-- Item Reports Section -->
     <section class="bg-white p-4 sm:p-5 lg:p-6 rounded-2xl shadow-lg border border-slate-200">
       <div class="flex items-center mb-5">
@@ -435,6 +467,21 @@
       }
     }
 
+    function updateReportStats(stats) {
+      const totalEl = document.getElementById('reportStatTotal');
+      const pcsEl = document.getElementById('reportStatPcs');
+      const devicesEl = document.getElementById('reportStatDevices');
+      const valueEl = document.getElementById('reportStatValue');
+      if (totalEl) totalEl.textContent = String(Number(stats?.total || 0));
+      if (pcsEl) pcsEl.textContent = String(Number(stats?.pcs || 0));
+      if (devicesEl) devicesEl.textContent = String(Number(stats?.devices || 0));
+      if (valueEl) {
+        valueEl.textContent = `\u20B1${Number(stats?.total_value || 0).toLocaleString('en-PH', {
+          maximumFractionDigits: 0
+        })}`;
+      }
+    }
+
     // -------------------------------
     // 🧩 Load Reports with Filters and Pagination
     // -------------------------------
@@ -451,6 +498,7 @@
       
       const res = await fetch(`/get-reports?${params.toString()}`);
       const result = await res.json();
+      updateReportStats(result.stats);
 
       const tbody = document.getElementById("report-body");
       tbody.innerHTML = "";

@@ -1,5 +1,6 @@
 from flask import Blueprint, render_template, session, redirect, url_for, flash, jsonify
 from db import get_db_connection
+from utils.user_activity import humanize_activity_action
 import pymysql
 
 from datetime import datetime, timedelta
@@ -413,13 +414,14 @@ def consumable_monthly_cost_data():
     try:
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
             # Get monthly cost data for consumables (based on RECEIVE transactions = stock in)
+            # Consumables currently have no unit-cost column in the database,
+            # so the chart reports received quantities and zero monetary cost.
             cur.execute("""
                 SELECT
                     DATE_FORMAT(t.created_at, '%Y-%m') as month,
-                    SUM(t.quantity * COALESCE(c.unit_cost, 0)) as monthly_cost,
+                    0 as monthly_cost,
                     SUM(t.quantity) as monthly_quantity
                 FROM consumable_transactions t
-                LEFT JOIN consumables c ON t.accession_id = c.accession_id
                 WHERE t.action = 'RECEIVE'
                   AND t.created_at >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
                 GROUP BY DATE_FORMAT(t.created_at, '%Y-%m')
@@ -721,140 +723,170 @@ def return_rate_data():
     finally:
         conn.close()
 
+def _table_exists(conn, table_name):
+    """Return True when a table exists in the active database."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM information_schema.TABLES"
+                " WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
+                (table_name,),
+            )
+            row = cur.fetchone()
+            if isinstance(row, dict):
+                return int(row.get('cnt', 0)) > 0
+            return bool(row and row[0] > 0)
+    except Exception:
+        return False
+
+
+def _relative_time(value):
+    """Human-friendly timestamp for the dashboard activity feed."""
+    if not value:
+        return ''
+    if not isinstance(value, datetime):
+        return str(value)
+
+    seconds = int((datetime.now() - value).total_seconds())
+    if seconds < 60:
+        return 'Just now'
+
+    minutes = seconds // 60
+    if minutes < 60:
+        return f'{minutes}m ago'
+
+    hours = minutes // 60
+    if hours < 24:
+        return f'{hours}h ago'
+
+    days = hours // 24
+    if days < 7:
+        return f'{days}d ago'
+
+    return value.strftime('%b %d, %Y')
+
+
+_ACTIVITY_STYLES = (
+    (('delete', 'remove'), ('trash-2', 'rose')),
+    (('archive',), ('archive', 'amber')),
+    (('add', 'create'), ('plus-circle', 'emerald')),
+    (('edit', 'update'), ('pencil', 'blue')),
+    (('import', 'export'), ('file-spreadsheet', 'violet')),
+    (('check', 'mark'), ('check-circle-2', 'emerald')),
+    (('surrender',), ('package-x', 'amber')),
+    (('damage',), ('alert-triangle', 'rose')),
+    (('login', 'logout'), ('log-in', 'slate')),
+    (('view', 'filter'), ('eye', 'sky')),
+)
+
+
+def _activity_style(action):
+    """Pick a lucide icon and accent tone based on an activity label."""
+    text = (action or '').lower()
+    for keywords, style in _ACTIVITY_STYLES:
+        if any(keyword in text for keyword in keywords):
+            return style
+    return ('activity', 'slate')
+
+
+def _get_ticket_counts(conn):
+    """Return ticket status totals from the active ticket table."""
+    counts = {
+        'pending': 0,
+        'ongoing': 0,
+        'resolved': 0,
+        'unresolved': 0,
+        'invalid': 0,
+    }
+
+    if _table_exists(conn, 'tickets'):
+        table_name = 'tickets'
+    elif _table_exists(conn, 'concerns'):
+        table_name = 'concerns'
+    else:
+        return counts
+
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                f"SELECT LOWER(COALESCE(status, '')) AS status_key, COUNT(*) AS total "
+                f"FROM {table_name} GROUP BY status_key"
+            )
+            for row in cur.fetchall() or []:
+                status_key = (row.get('status_key') or '').strip()
+                total = int(row.get('total') or 0)
+
+                if status_key in ('open', 'pending'):
+                    counts['pending'] += total
+                elif status_key in (
+                    'ongoing', 'accepted', 'in progress', 'processing',
+                    'assigned', 'in-progress', 'inprogress',
+                ):
+                    counts['ongoing'] += total
+                elif status_key in ('closed', 'resolved'):
+                    counts['resolved'] += total
+                elif status_key in ('declined', 'rejected', 'invalid'):
+                    counts['invalid'] += total
+                elif status_key == 'unresolved':
+                    counts['unresolved'] += total
+    except Exception as exc:
+        print('Dashboard ticket count error:', exc)
+
+    return counts
+
+
 @dashboard_bp.route('/dashboardload')
 def dashboard_load():
-    """Main dashboard data loading route."""
-    total_consumables = 0
-    total_consumable_items = 0
-    total_received_items = 0
-    total_return_items = 0
-    action_queue = []
+    """Overall system summary, recent activity, alerts, and global analytics."""
+    total_assets = 0
+    total_asset_value = 0.0
+    open_requests = 0
+    pending_requests = 0
+    ongoing_requests = 0
+    maintenance_due = 0
+    overdue_maintenance = 0
+    due_soon_maintenance = 0
+    never_checked_maintenance = 0
+    maintenance_notifications = []
+    low_stock_count = 0
+    low_stock_items = []
+    recent_activities = []
+
     conn = get_db_connection()
     try:
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
-
-            def _get_num(row, key, default=0):
-                if not row:
-                    return default
-                val = row.get(key, default)
-                return default if val is None else val
-
-            
-
-            # 🔹 Manage Items Count (devices_full)
             has_dev_arch = _table_has_column(conn, 'devices_full')
             has_pc_arch = _table_has_column(conn, 'pcinfofull')
+            dev_arch_clause = 'AND COALESCE(is_archived, 0) = 0' if has_dev_arch else ''
+            pc_arch_clause = 'AND COALESCE(is_archived, 0) = 0' if has_pc_arch else ''
 
-            dev_arch_clause = 'AND is_archived = 0' if has_dev_arch else ''
-            pc_arch_clause = 'AND is_archived = 0' if has_pc_arch else ''
-
-            cur.execute(f"SELECT COUNT(*) AS total FROM devices_full WHERE 1=1 {dev_arch_clause} AND LOWER(COALESCE(status, '')) != 'surrendered'")
-            total_items = _get_num(cur.fetchone(), 'total', 0)
-
-            # 🔹 PC Inventory Count (pcs)
-            cur.execute(f"SELECT COUNT(*) AS total FROM pcinfofull WHERE 1=1 {pc_arch_clause} AND LOWER(COALESCE(status, '')) != 'surrendered'")
-            total_pcs = _get_num(cur.fetchone(), 'total', 0)
-
-            # 🔹 Status Counts (from devices_units)
-            cur.execute(f"SELECT COUNT(*) AS total FROM devices_full WHERE status = 'Available' {dev_arch_clause}")
-            available_devices = _get_num(cur.fetchone(), 'total', 0)
-            cur.execute(f"SELECT COUNT(*) AS total FROM pcinfofull WHERE status = 'Available' {pc_arch_clause}")
-            available_pc = _get_num(cur.fetchone(), 'total', 0)
-
-            available_items = available_devices + available_pc
-
-            cur.execute(f"SELECT COUNT(*) AS total FROM devices_full WHERE LOWER(COALESCE(status, '')) IN ('in used','in use','in-used','inuse') {dev_arch_clause}")
-            in_use_devices = _get_num(cur.fetchone(), 'total', 0)
-
-            cur.execute(f"SELECT COUNT(*) AS total FROM pcinfofull WHERE LOWER(COALESCE(status, '')) IN ('in used','in use','in-used','inuse') {pc_arch_clause}")
-            in_use_pcs = _get_num(cur.fetchone(), 'total', 0)
-
-            in_use_items = in_use_devices + in_use_pcs
-
-            cur.execute(f"SELECT COUNT(*) AS total FROM devices_full WHERE status = 'Damaged' {dev_arch_clause}")
-            damaged_pc = _get_num(cur.fetchone(), 'total', 0)
-            cur.execute(f"SELECT COUNT(*) AS total FROM pcinfofull WHERE status = 'Damaged' {pc_arch_clause}")
-            damaged_devices = _get_num(cur.fetchone(), 'total', 0)
-            damaged_items= damaged_pc + damaged_devices
-
-            # 🔹 Total Consumables Count (exclude archived if column exists)
-            has_cons_arch = _table_has_column(conn, 'consumables')
-            cons_where_arch = 'WHERE COALESCE(is_archived, 0) = 0' if has_cons_arch else ''
-            cur.execute(f"SELECT COUNT(*) AS total FROM consumables {cons_where_arch}")
-            total_consumables = _get_num(cur.fetchone(), 'total', 0)
-
-            # 🔹 Total Consumable Items Count (devices_full)
-            cur.execute(f"SELECT COUNT(*) AS total FROM devices_full WHERE device_type = 'Consumable' {dev_arch_clause} AND LOWER(COALESCE(status, '')) != 'surrendered'")
-            total_consumable_items = _get_num(cur.fetchone(), 'total', 0)
-
-            # 🔹 Total Received/Returned Items (from consumable_transactions)
-            cur.execute("SELECT IFNULL(SUM(quantity), 0) AS total FROM consumable_transactions WHERE action = 'RECEIVE'")
-            total_received_items = _get_num(cur.fetchone(), 'total', 0)
-
-            # Include returns recorded in the dedicated `consumable_usage` table
-            cur.execute("SELECT IFNULL(SUM(quantity), 0) AS total FROM consumable_transactions WHERE action = 'RETURN'")
-            total_return_tx = _get_num(cur.fetchone(), 'total', 0)
-            try:
-                cur.execute("SELECT IFNULL(SUM(quantity), 0) AS total FROM consumable_usage")
-                total_return_usage = _get_num(cur.fetchone(), 'total', 0)
-            except Exception:
-                total_return_usage = 0
-
-            total_return_items = int(total_return_tx) + int(total_return_usage)
-
-            # 🔹 Total Departments Count
-            cur.execute("SELECT COUNT(*) AS total FROM departments")
-            total_departments = _get_num(cur.fetchone(), 'total', 0)
-
-            # 🔹 Total Cost In (sum of acquisition_cost from both tables)
-            cur.execute(f"SELECT IFNULL(SUM(acquisition_cost), 0) AS total FROM devices_full WHERE 1=1 {dev_arch_clause} AND LOWER(COALESCE(status, '')) != 'surrendered'")
-            device_cost = _get_num(cur.fetchone(), 'total', 0)
-
-            cur.execute(f"SELECT IFNULL(SUM(acquisition_cost), 0) AS total FROM pcinfofull WHERE 1=1 {pc_arch_clause} AND LOWER(COALESCE(status, '')) != 'surrendered'")
-            pc_cost = _get_num(cur.fetchone(), 'total', 0)
-
-            # Average cost
+            # Overall asset totals across devices and PCs
             cur.execute(f"""
-                SELECT AVG(acquisition_cost) AS avg_cost FROM (
-                    SELECT acquisition_cost FROM devices_full WHERE 1=1 {dev_arch_clause} AND LOWER(COALESCE(status, '')) != 'surrendered'
-                    UNION ALL
-                    SELECT acquisition_cost FROM pcinfofull WHERE 1=1 {pc_arch_clause} AND LOWER(COALESCE(status, '')) != 'surrendered'
-                ) AS combined
+                SELECT COUNT(*) AS total, COALESCE(SUM(acquisition_cost), 0) AS asset_value
+                FROM devices_full
+                WHERE LOWER(COALESCE(status, '')) != 'surrendered' {dev_arch_clause}
             """)
-            avg_cost = _get_num(cur.fetchone(), 'avg_cost', 0) or 0
+            device_totals = cur.fetchone() or {}
 
-            total_cost_in = float(device_cost) + float(pc_cost)
+            cur.execute(f"""
+                SELECT COUNT(*) AS total, COALESCE(SUM(acquisition_cost), 0) AS asset_value
+                FROM pcinfofull
+                WHERE LOWER(COALESCE(status, '')) != 'surrendered' {pc_arch_clause}
+            """)
+            pc_totals = cur.fetchone() or {}
 
-            maintenance_notifications = []
-            recent_transactions = []
-            low_stock_alerts = []
-            zero_stock_alerts = []
-            overstocked_alerts = []
+            total_assets = int(device_totals.get('total') or 0) + int(pc_totals.get('total') or 0)
+            total_asset_value = float(device_totals.get('asset_value') or 0) + float(pc_totals.get('asset_value') or 0)
 
-            action_queue = []
-            _action_queue_seen = set()
+            # Open requests: pending, ongoing, and explicitly unresolved tickets
+            ticket_counts = _get_ticket_counts(conn)
+            pending_requests = ticket_counts['pending']
+            ongoing_requests = ticket_counts['ongoing']
+            open_requests = pending_requests + ongoing_requests + ticket_counts['unresolved']
 
-            def _queue_action(priority_rank, priority, queue_type, title, details, action_url, action_label, queue_key=None):
-                key = queue_key or (queue_type, title)
-                if key in _action_queue_seen:
-                    return
-
-                _action_queue_seen.add(key)
-                action_queue.append({
-                    'priority_rank': priority_rank,
-                    'priority': priority,
-                    'queue_type': queue_type,
-                    'title': title,
-                    'details': details,
-                    'action_url': action_url,
-                    'action_label': action_label,
-                })
-
-            # 🔹 Maintenance Notifications - Only show items that need checking
+            # Maintenance due / overdue across devices and PCs
             try:
-                cur.execute("""
-                SELECT * FROM (
-                    -- Devices needing maintenance
+                maintenance_items_sql = f"""
                     SELECT
                         accession_id as item_id,
                         item_name,
@@ -873,7 +905,6 @@ def dashboard_load():
                     LEFT JOIN departments dep ON df.department_id = dep.department_id
                     WHERE df.status != 'Damaged' AND LOWER(COALESCE(df.status, '')) != 'surrendered' {dev_arch_clause}
                     UNION ALL
-                    -- PCs needing maintenance
                     SELECT
                         pcid as item_id,
                         pcname as item_name,
@@ -891,334 +922,121 @@ def dashboard_load():
                     FROM pcinfofull pcf
                     LEFT JOIN departments dep ON pcf.department_id = dep.department_id
                     WHERE pcf.status != 'Damaged' AND LOWER(COALESCE(pcf.status, '')) != 'surrendered' {pc_arch_clause}
-                ) AS maintenance_items
-                WHERE maintenance_status != 'OK'
-                ORDER BY
-                    CASE maintenance_status
-                        WHEN 'Overdue' THEN 1
-                        WHEN 'Due Soon' THEN 2
-                        WHEN 'Never Checked' THEN 3
-                        ELSE 4
-                    END,
-                    days_since_check DESC
-                LIMIT 15
-                """)
-                maintenance_notifications = cur.fetchall()
-            except Exception as e:
-                print("Dashboard maintenance query error:", e)
-                maintenance_notifications = []
+                """
 
+                cur.execute(f"""
+                    SELECT maintenance_status, COUNT(*) AS total
+                    FROM ({maintenance_items_sql}) AS due_items
+                    WHERE maintenance_status != 'OK'
+                    GROUP BY maintenance_status
+                """)
+                for row in cur.fetchall() or []:
+                    status = row.get('maintenance_status')
+                    total = int(row.get('total') or 0)
+                    maintenance_due += total
+                    if status == 'Overdue':
+                        overdue_maintenance = total
+                    elif status == 'Due Soon':
+                        due_soon_maintenance = total
+                    elif status == 'Never Checked':
+                        never_checked_maintenance = total
+
+                cur.execute(f"""
+                    SELECT *
+                    FROM ({maintenance_items_sql}) AS due_items
+                    WHERE maintenance_status != 'OK'
+                    ORDER BY
+                        CASE maintenance_status
+                            WHEN 'Overdue' THEN 1
+                            WHEN 'Due Soon' THEN 2
+                            WHEN 'Never Checked' THEN 3
+                            ELSE 4
+                        END,
+                        days_since_check DESC
+                    LIMIT 8
+                """)
+                maintenance_notifications = cur.fetchall() or []
+            except Exception as exc:
+                print('Dashboard maintenance query error:', exc)
+
+            # Consumables that are low or out of stock
+            try:
+                has_cons_arch = _table_has_column(conn, 'consumables')
+                cons_arch_clause = 'AND COALESCE(c.is_archived, 0) = 0' if has_cons_arch else ''
+
+                cur.execute(f"""
+                    SELECT COUNT(*) AS total
+                    FROM consumables c
+                    WHERE c.status IN ('Low Stock', 'Out of Stock') {cons_arch_clause}
+                """)
+                low_stock_count = int((cur.fetchone() or {}).get('total') or 0)
+
+                cur.execute(f"""
+                    SELECT
+                        c.accession_id,
+                        c.item_name,
+                        c.brand,
+                        c.category,
+                        c.quantity,
+                        c.unit,
+                        c.status,
+                        d.department_name
+                    FROM consumables c
+                    LEFT JOIN departments d ON c.department_id = d.department_id
+                    WHERE c.status IN ('Low Stock', 'Out of Stock') {cons_arch_clause}
+                    ORDER BY
+                        CASE c.status WHEN 'Out of Stock' THEN 0 ELSE 1 END,
+                        c.item_name ASC
+                    LIMIT 8
+                """)
+                low_stock_items = cur.fetchall() or []
+            except Exception as exc:
+                print('Dashboard low stock query error:', exc)
+
+            # Recent system activity, excluding this dashboard's own page views
             try:
                 cur.execute("""
-                SELECT
-                    t.item_name AS item_name,
-                    CONCAT(t.action, ' (', t.quantity, ')') AS action,
-                    t.created_at AS created_at
-                FROM consumable_transactions t
-                ORDER BY t.created_at DESC
-                LIMIT 5
-                """)
-                recent_transactions = cur.fetchall()
-            except Exception as e:
-                print("Dashboard recent transactions query error:", e)
-                recent_transactions = []
-
-            # 🔹 Low Stock Alerts (items with quantity <= 2 or status indicating low availability)
-            try:
-                cur.execute("""
-                SELECT 'device' as item_type, accession_id as item_id, item_name, brand_model, 
-                       quantity, status, device_type, department_name
-                FROM devices_full df
-                LEFT JOIN departments dep ON df.department_id = dep.department_id
-                WHERE (quantity <= 2 OR status IN ('Needs Checking', 'Damaged')) AND LOWER(COALESCE(status, '')) != 'surrendered' {dev_arch_clause}
-                ORDER BY quantity ASC, status DESC
-                LIMIT 10
-                """)
-                low_stock_devices = list(cur.fetchall() or [])
-
-                cur.execute("""
-                SELECT 'pc' as item_type, pcid as item_id, pcname as item_name, 
-                       '' as brand_model, quantity, status, 'PC' as device_type, department_name
-                FROM pcinfofull pcf
-                LEFT JOIN departments dep ON pcf.department_id = dep.department_id
-                WHERE (quantity <= 2 OR status IN ('Needs Checking', 'Damaged')) AND LOWER(COALESCE(status, '')) != 'surrendered' {pc_arch_clause}
-                ORDER BY quantity ASC, status DESC
-                LIMIT 10
-                """)
-                low_stock_pcs = list(cur.fetchall() or [])
-
-                # Combine low stock alerts
-                low_stock_alerts = low_stock_devices + low_stock_pcs
-            except Exception as e:
-                print("Dashboard low stock query error:", e)
-                low_stock_alerts = []
-
-            # 🔹 Zero Stock Alerts (items completely depleted - quantity = 0)
-            try:
-                cur.execute("""
-                SELECT 'device' as item_type, accession_id as item_id, item_name, brand_model,
-                       quantity, status, device_type, department_name
-                FROM devices_full df
-                LEFT JOIN departments dep ON df.department_id = dep.department_id
-                WHERE quantity = 0 AND LOWER(COALESCE(status, '')) != 'surrendered' {dev_arch_clause}
-                ORDER BY item_name ASC
-                LIMIT 10
-                """)
-                zero_stock_devices = list(cur.fetchall() or [])
-
-                cur.execute("""
-                SELECT 'pc' as item_type, pcid as item_id, pcname as item_name,
-                       '' as brand_model, quantity, status, 'PC' as device_type, department_name
-                FROM pcinfofull pcf
-                LEFT JOIN departments dep ON pcf.department_id = dep.department_id
-                WHERE quantity = 0 AND LOWER(COALESCE(status, '')) != 'surrendered' {pc_arch_clause}
-                ORDER BY pcname ASC
-                LIMIT 10
-                """)
-                zero_stock_pcs = list(cur.fetchall() or [])
-
-                # Combine zero stock alerts
-                zero_stock_alerts = zero_stock_devices + zero_stock_pcs
-            except Exception as e:
-                print("Dashboard zero stock query error:", e)
-                zero_stock_alerts = []
-
-            # 🔹 Overstocked Alerts (items with excess quantity - quantity >= 10)
-            try:
-                cur.execute("""
-                SELECT 'device' as item_type, accession_id as item_id, item_name, brand_model,
-                       quantity, status, device_type, department_name
-                FROM devices_full df
-                LEFT JOIN departments dep ON df.department_id = dep.department_id
-                WHERE quantity >= 10 AND LOWER(COALESCE(status, '')) != 'surrendered' {dev_arch_clause}
-                ORDER BY quantity DESC
-                LIMIT 10
-                """)
-                overstocked_devices = list(cur.fetchall() or [])
-
-                cur.execute("""
-                SELECT 'pc' as item_type, pcid as item_id, pcname as item_name,
-                       '' as brand_model, quantity, status, 'PC' as device_type, department_name
-                FROM pcinfofull pcf
-                LEFT JOIN departments dep ON pcf.department_id = dep.department_id
-                WHERE quantity >= 10 AND LOWER(COALESCE(status, '')) != 'surrendered' {pc_arch_clause}
-                ORDER BY quantity DESC
-                LIMIT 10
-                """)
-                overstocked_pcs = list(cur.fetchall() or [])
-
-                # Combine overstocked alerts
-                overstocked_alerts = overstocked_devices + overstocked_pcs
-            except Exception as e:
-                print("Dashboard overstocked query error:", e)
-                overstocked_alerts = []
-
-            # 🔹 Action Queue (highest-priority tasks across maintenance, stock, and condition)
-            for alert in zero_stock_alerts:
-                item_name = alert.get('item_name') or 'Unknown item'
-                department_name = alert.get('department_name') or 'No department'
-                device_type = alert.get('device_type') or 'Item'
-                quantity = alert.get('quantity') or 0
-
-                _queue_action(
-                    priority_rank=1,
-                    priority='Critical',
-                    queue_type='Stockout',
-                    title=f"{item_name} is out of stock",
-                    details=f"{device_type} • {department_name} • Qty: {quantity}",
-                    action_url=url_for('manage_inventory.inventory_load'),
-                    action_label='Open Inventory',
-                    queue_key=f"stockout:{alert.get('item_type')}:{alert.get('item_id')}"
-                )
-
-            for notification in maintenance_notifications:
-                status = notification.get('maintenance_status')
-                if status == 'Overdue':
-                    priority_rank = 1
-                    priority = 'Critical'
-                elif status == 'Never Checked':
-                    priority_rank = 2
-                    priority = 'High'
-                elif status == 'Due Soon':
-                    priority_rank = 3
-                    priority = 'Medium'
-                else:
-                    continue
-
-                item_name = notification.get('item_name') or 'Unnamed item'
-                department_name = notification.get('department_name') or 'No department'
-                item_type = notification.get('item_type') or 'Device'
-                days_since_check = notification.get('days_since_check')
-
-                if status == 'Never Checked':
-                    check_note = 'No maintenance history yet'
-                elif days_since_check is None:
-                    check_note = 'Maintenance interval reached'
-                else:
-                    check_note = f"{days_since_check} days since last check"
-
-                _queue_action(
-                    priority_rank=priority_rank,
-                    priority=priority,
-                    queue_type='Maintenance',
-                    title=f"{item_name} requires maintenance ({status})",
-                    details=f"{item_type} • {department_name} • {check_note}",
-                    action_url=url_for('maintenance_bp.maintenance_history_page'),
-                    action_label='Open Maintenance',
-                    queue_key=f"maintenance:{item_type}:{notification.get('item_id')}"
-                )
-
-            for alert in low_stock_alerts:
-                item_name = alert.get('item_name') or 'Unknown item'
-                department_name = alert.get('department_name') or 'No department'
-                device_type = alert.get('device_type') or 'Item'
-                status = (alert.get('status') or '').strip()
-                quantity = alert.get('quantity') or 0
-
-                if status == 'Damaged':
-                    _queue_action(
-                        priority_rank=2,
-                        priority='High',
-                        queue_type='Condition',
-                        title=f"{item_name} is marked as damaged",
-                        details=f"{device_type} • {department_name}",
-                        action_url=url_for('damage_report_bp.damage_report_page'),
-                        action_label='Open Damage Report',
-                        queue_key=f"damaged:{alert.get('item_type')}:{alert.get('item_id')}"
+                    SELECT username, role, action, module, details, route, created_at
+                    FROM user_activity_log
+                    WHERE NOT (
+                        action = 'View Page'
+                        AND (
+                            LOWER(COALESCE(module, '')) = 'dashboard'
+                            OR LOWER(COALESCE(route, '')) LIKE '/dashboard%'
+                        )
                     )
-                elif status == 'Needs Checking':
-                    _queue_action(
-                        priority_rank=3,
-                        priority='Medium',
-                        queue_type='Condition',
-                        title=f"{item_name} needs condition checking",
-                        details=f"{device_type} • {department_name}",
-                        action_url=url_for('manage_inventory.inventory_load'),
-                        action_label='Review Item',
-                        queue_key=f"needs-check:{alert.get('item_type')}:{alert.get('item_id')}"
-                    )
-                elif quantity <= 1 and quantity > 0:
-                    _queue_action(
-                        priority_rank=2,
-                        priority='High',
-                        queue_type='Stock',
-                        title=f"{item_name} is running low",
-                        details=f"{device_type} • {department_name} • Qty: {quantity}",
-                        action_url=url_for('manage_inventory.inventory_load'),
-                        action_label='Replenish',
-                        queue_key=f"low-stock:{alert.get('item_type')}:{alert.get('item_id')}"
-                    )
+                    ORDER BY created_at DESC, log_id DESC
+                    LIMIT 8
+                """)
+                for row in cur.fetchall() or []:
+                    item = dict(row)
+                    action_label = humanize_activity_action(item.get('action'), route=item.get('route'))
+                    item['action_label'] = action_label
+                    item['icon'], item['tone'] = _activity_style(action_label)
+                    item['when'] = _relative_time(item.get('created_at'))
+                    recent_activities.append(item)
+            except Exception as exc:
+                print('Dashboard recent activity error:', exc)
 
-            action_queue.sort(key=lambda item: (item['priority_rank'], item['queue_type'], item['title']))
-            action_queue = action_queue[:12]
-
-            # 🔹 Ticket/Concern status summary counts
-            # Prefer counts from the `tickets` table (admin queue) when it exists.
-            pending_tickets = 0
-            inprogress_tickets = 0
-            resolved_tickets = 0
-            unresolved_tickets = 0
-            invalid_tickets = 0
-            try:
-                # Check if `tickets` table exists in the current database
-                cur.execute("SELECT COUNT(*) AS cnt FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tickets'")
-                has_tickets = bool(cur.fetchone().get('cnt'))
-
-                if has_tickets:
-                    # Use tickets table counts only to match the admin view
-                    cur.execute("SELECT LOWER(COALESCE(status, '')) AS s, COUNT(*) AS cnt FROM tickets GROUP BY s")
-                    rows = cur.fetchall() or []
-                    for r in rows:
-                        s = (r.get('s') or '').strip()
-                        cnt = int(r.get('cnt') or 0)
-                        if s in ('open', 'pending'):
-                            pending_tickets += cnt
-                        elif s in ('ongoing', 'accepted', 'in progress', 'processing', 'assigned', 'in-progress', 'inprogress'):
-                            inprogress_tickets += cnt
-                        elif s in ('closed', 'resolved'):
-                            resolved_tickets += cnt
-                        elif s in ('declined', 'rejected', 'invalid'):
-                            invalid_tickets += cnt
-                        elif s == 'unresolved':
-                            unresolved_tickets += cnt
-                else:
-                    # Fallback to legacy `concerns` table if tickets not present
-                    cur.execute("SELECT LOWER(COALESCE(status, '')) AS s, COUNT(*) AS cnt FROM concerns GROUP BY s")
-                    rows = cur.fetchall() or []
-                    for r in rows:
-                        s = (r.get('s') or '').strip()
-                        cnt = int(r.get('cnt') or 0)
-                        if s in ('open', 'pending'):
-                            pending_tickets += cnt
-                        elif s in ('ongoing', 'accepted', 'in progress', 'processing', 'assigned', 'in-progress', 'inprogress'):
-                            inprogress_tickets += cnt
-                        elif s in ('closed', 'resolved'):
-                            resolved_tickets += cnt
-                        elif s in ('declined', 'rejected', 'invalid'):
-                            invalid_tickets += cnt
-                        elif s == 'unresolved':
-                            unresolved_tickets += cnt
-            except Exception as e:
-                # Tables might not exist or other DB issue; don't break dashboard
-                print('Dashboard ticket counts error:', e)
-
-            
-
-    except Exception as e:
-        print("Dashboard load error:", e)
-        flash("Error loading dashboard data.", "error")
-        return render_template('dashboard.html',
-            total_items=0,
-            total_pcs=0,
-            total_consumables=0,
-            total_consumable_items=0,
-            total_received_items=0,
-            total_return_items=0,
-            total_departments=0,
-            available_items=0,
-            in_use_items=0,
-            damaged_items=0,
-            total_cost_in=0,
-            avg_cost=0,
-            recent_transactions=[],
-            maintenance_notifications=[],
-            low_stock_alerts=[],
-            zero_stock_alerts=[],
-            overstocked_alerts=[],
-            action_queue=[],
-            pending_tickets=0,
-            inprogress_tickets=0,
-            resolved_tickets=0,
-            unresolved_tickets=0,
-            invalid_tickets=0
-        )
+    except Exception as exc:
+        print('Dashboard load error:', exc)
+        flash('Error loading dashboard data.', 'error')
     finally:
         conn.close()
 
-    # ✅ Pass data to dashboard.html
     return render_template(
         'dashboard.html',
-        total_items=total_items,          # Manage Items count (devices_full)
-        total_pcs=total_pcs,              # PC Inventory count (pcs)
-        total_consumables=total_consumables,  # Total consumables from consumables table
-        total_consumable_items=total_consumable_items,  # Consumable items from devices_full
-        total_received_items=total_received_items,
-        total_return_items=total_return_items,
-        total_departments=total_departments,  # Total departments
-        available_items=available_items,  # Available from devices_units
-        in_use_items=in_use_items,        # Borrowed = In Use
-        damaged_items=damaged_items,      # Damaged from devices_units
-        total_cost_in=total_cost_in,      # Placeholder ₱0.00
-        recent_transactions=recent_transactions,
+        total_assets=total_assets,
+        total_asset_value=total_asset_value,
+        open_requests=open_requests,
+        pending_requests=pending_requests,
+        ongoing_requests=ongoing_requests,
+        maintenance_due=maintenance_due,
+        overdue_maintenance=overdue_maintenance,
+        due_soon_maintenance=due_soon_maintenance,
+        never_checked_maintenance=never_checked_maintenance,
         maintenance_notifications=maintenance_notifications,
-        low_stock_alerts=low_stock_alerts,
-        zero_stock_alerts=zero_stock_alerts,
-        overstocked_alerts=overstocked_alerts,
-        action_queue=action_queue
-        ,
-        pending_tickets=pending_tickets,
-        inprogress_tickets=inprogress_tickets,
-        resolved_tickets=resolved_tickets,
-        unresolved_tickets=unresolved_tickets,
-        invalid_tickets=invalid_tickets
+        low_stock_count=low_stock_count,
+        low_stock_items=low_stock_items,
+        recent_activities=recent_activities,
     )

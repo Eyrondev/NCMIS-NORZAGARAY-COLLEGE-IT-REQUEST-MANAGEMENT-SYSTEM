@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, request
 from db import get_db_connection
 import pymysql
+from utils.maintenance_audit import ensure_maintenance_history_schema
 
 maintenance_bp = Blueprint(
     "maintenance_bp",
@@ -21,11 +22,36 @@ def maintenance_history_page():
     offset = (page - 1) * per_page
     
     conn = get_db_connection()
+    try:
+        ensure_maintenance_history_schema(conn)
+    except Exception as schema_error:
+        print(f"[maintenance/history] maintenance schema error: {schema_error}")
     cur = conn.cursor(pymysql.cursors.DictCursor)
  
     # Get total count
     cur.execute("SELECT COUNT(*) as total FROM maintenance_history")
     total_items = cur.fetchone()['total']
+
+    # Summary statistics for the maintenance mini-dashboard
+    cur.execute("""
+        SELECT
+            COUNT(DISTINCT CONCAT(UPPER(TRIM(asset_type)), ':', asset_id)) AS assets_serviced,
+            SUM(
+                CASE
+                    WHEN LOWER(TRIM(new_status)) IN ('damaged', 'damage', 'unusable')
+                      OR LOWER(TRIM(risk_level)) = 'high' THEN 1
+                    ELSE 0
+                END
+            ) AS high_risk_outcomes,
+            SUM(
+                CASE
+                    WHEN performed_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01') THEN 1
+                    ELSE 0
+                END
+            ) AS this_month
+        FROM maintenance_history
+    """)
+    stats_row = cur.fetchone() or {}
     
     # Get paginated records
     cur.execute("""
@@ -35,6 +61,14 @@ def maintenance_history_page():
         UPPER(TRIM(mh.asset_type)) AS asset_type_key,
         mh.asset_id,
         mh.action,
+        COALESCE(mh.maintenance_type, mh.action) AS maintenance_type,
+        mh.replaced_part,
+        mh.previous_part,
+        mh.new_part,
+        mh.previous_part_status,
+        mh.new_part_status,
+        mh.computer_name,
+        COALESCE(mh.technician, mh.performed_by) AS technician,
         mh.old_status,
         mh.new_status,
         mh.risk_level,
@@ -55,10 +89,13 @@ def maintenance_history_page():
         mh.performed_by,
         mh.remarks,
         CASE
-            WHEN UPPER(TRIM(mh.asset_type)) = 'PC' THEN pc.pcname
-            WHEN UPPER(TRIM(mh.asset_type)) = 'DEVICE' THEN df.item_name
-            ELSE NULL
-        END AS asset_name
+            WHEN UPPER(TRIM(mh.asset_type)) = 'PC'
+                THEN COALESCE(mh.computer_name, pc.pcname)
+            WHEN UPPER(TRIM(mh.asset_type)) = 'DEVICE'
+                THEN COALESCE(mh.computer_name, df.item_name)
+            ELSE mh.computer_name
+        END AS asset_name,
+        COALESCE(mh.asset_serial, pc.serial_no, df.serial_no) AS asset_serial
     FROM maintenance_history mh
     LEFT JOIN pcinfofull pc
         ON UPPER(TRIM(mh.asset_type)) = 'PC'
@@ -82,5 +119,10 @@ def maintenance_history_page():
         page=page,
         per_page=per_page,
         total_items=total_items,
-        total_pages=total_pages
+        total_pages=total_pages,
+        stats={
+            "assets_serviced": int(stats_row.get("assets_serviced") or 0),
+            "high_risk_outcomes": int(stats_row.get("high_risk_outcomes") or 0),
+            "this_month": int(stats_row.get("this_month") or 0),
+        }
     )

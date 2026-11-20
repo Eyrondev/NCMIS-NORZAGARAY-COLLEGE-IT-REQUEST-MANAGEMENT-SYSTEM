@@ -56,4 +56,4 @@ def notifications_modal():
     """
     Render modal partial for notifications.
     """
-    return render_template('notifications_modal.html')
+    return render_template('notification_modal.html')

@@ -388,7 +388,13 @@ def filter_devices():
 
 @manage_item_bp.route('/device-filter-modal')
 def device_filter_modal():
-    departments = get_departments()
+    conn = get_db_connection()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute("SELECT department_id, department_name FROM departments ORDER BY department_name")
+            departments = cur.fetchall()
+    finally:
+        conn.close()
     return render_template('partials/filter_device_modal.html', departments=departments)
 
 

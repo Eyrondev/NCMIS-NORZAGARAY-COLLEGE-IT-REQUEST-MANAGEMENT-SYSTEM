@@ -1,0 +1,426 @@
+<!-- Shared inventory feedback: toast notifications and confirmation dialog -->
+<style>
+  #toastContainer {
+    width: min(94vw, 430px);
+    max-height: calc(100vh - 2rem);
+    overflow: visible;
+    pointer-events: none;
+    z-index: 10000;
+  }
+
+  .toast {
+    pointer-events: auto;
+    position: relative;
+    overflow: hidden;
+    width: min(94vw, 450px);
+    max-width: 450px;
+    min-width: 0;
+    border: 1px solid rgba(148, 163, 184, 0.26);
+    border-radius: 0.95rem;
+    background: linear-gradient(130deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.98) 60%, rgba(241, 245, 249, 0.98) 100%);
+    box-shadow: 0 20px 42px -24px rgba(15, 23, 42, 0.62), 0 16px 30px -24px rgba(59, 130, 246, 0.55);
+    backdrop-filter: blur(6px);
+    transform: translate3d(26px, 0, 0) scale(0.97);
+    opacity: 0;
+    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.24s ease;
+  }
+
+  .toast::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(114deg, rgba(255, 255, 255, 0.36) 0%, rgba(255, 255, 255, 0.06) 38%, rgba(255, 255, 255, 0) 72%);
+    z-index: 0;
+  }
+
+  .toast.show {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 1;
+  }
+
+  .toast.hide {
+    transform: translate3d(34px, 0, 0) scale(0.95);
+    opacity: 0;
+  }
+
+  .toast-body {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.72rem;
+    padding: 0.82rem 0.9rem;
+    color: #0f172a;
+  }
+
+  .toast-icon-shell {
+    width: 2.05rem;
+    height: 2.05rem;
+    border-radius: 9999px;
+    border: 1px solid transparent;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .toast-icon-shell.success { color: #047857; background: linear-gradient(145deg, rgba(209, 250, 229, 0.95) 0%, rgba(167, 243, 208, 0.85) 100%); border-color: rgba(16, 185, 129, 0.34); }
+  .toast-icon-shell.error { color: #b91c1c; background: linear-gradient(145deg, rgba(254, 226, 226, 0.95) 0%, rgba(254, 202, 202, 0.84) 100%); border-color: rgba(239, 68, 68, 0.34); }
+  .toast-icon-shell.warning { color: #92400e; background: linear-gradient(145deg, rgba(254, 243, 199, 0.95) 0%, rgba(253, 230, 138, 0.84) 100%); border-color: rgba(245, 158, 11, 0.34); }
+  .toast-icon-shell.info { color: #1d4ed8; background: linear-gradient(145deg, rgba(219, 234, 254, 0.95) 0%, rgba(191, 219, 254, 0.84) 100%); border-color: rgba(59, 130, 246, 0.34); }
+
+  .toast-title {
+    font-size: 0.77rem;
+    line-height: 1.1;
+    font-weight: 800;
+    color: #0f172a;
+    letter-spacing: 0.01em;
+    margin-bottom: 0.12rem;
+  }
+
+  .toast-message {
+    font-size: 0.74rem;
+    line-height: 1.28;
+    color: #475569;
+    word-break: break-word;
+  }
+
+  .toast-dismiss {
+    width: 1.85rem;
+    height: 1.85rem;
+    border-radius: 9999px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(255, 255, 255, 0.7);
+    color: #64748b;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: transform 0.16s ease, color 0.16s ease, background-color 0.16s ease;
+  }
+
+  .toast-dismiss:hover { transform: rotate(90deg); color: #0f172a; background: rgba(255, 255, 255, 0.98); }
+
+  .toast-progress {
+    height: 3px;
+    border-radius: 0 0 0.9rem 0.9rem;
+    overflow: hidden;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(15, 23, 42, 0.08);
+    z-index: 1;
+  }
+
+  .toast-progress-bar {
+    height: 100%;
+    width: 100%;
+    transform-origin: left;
+    animation: toastProgress var(--toast-duration) linear forwards;
+    background: linear-gradient(90deg, rgba(59, 130, 246, 0.72) 0%, rgba(79, 70, 229, 0.9) 100%);
+  }
+
+  .toast-tone-success { border-color: rgba(16, 185, 129, 0.34); }
+  .toast-tone-success .toast-progress-bar { background: linear-gradient(90deg, rgba(16, 185, 129, 0.72) 0%, rgba(5, 150, 105, 0.9) 100%); }
+  .toast-tone-error { border-color: rgba(239, 68, 68, 0.34); }
+  .toast-tone-error .toast-progress-bar { background: linear-gradient(90deg, rgba(239, 68, 68, 0.72) 0%, rgba(220, 38, 38, 0.9) 100%); }
+  .toast-tone-warning { border-color: rgba(245, 158, 11, 0.34); }
+  .toast-tone-warning .toast-progress-bar { background: linear-gradient(90deg, rgba(245, 158, 11, 0.72) 0%, rgba(217, 119, 6, 0.9) 100%); }
+  .toast-tone-info { border-color: rgba(59, 130, 246, 0.34); }
+
+  .inventory-modal-backdrop,
+  #pcModal,
+  #itemModal,
+  #consumableModal,
+  #deleteModal,
+  #confirmationModal {
+    background:
+      radial-gradient(1100px 420px at 50% -20%, rgba(59, 130, 246, 0.22), transparent 56%),
+      rgba(15, 23, 42, 0.56);
+    backdrop-filter: blur(4px);
+  }
+
+  .inventory-alert-card {
+    width: 100%;
+    max-width: 25rem;
+    padding: 1.45rem;
+    border-radius: 1rem;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid #dbe4f2;
+    background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    box-shadow: 0 30px 58px -32px rgba(15, 23, 42, 0.7), 0 18px 34px -26px rgba(37, 99, 235, 0.55);
+  }
+
+  .inventory-alert-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(115deg, rgba(255, 255, 255, 0.36) 0%, rgba(255, 255, 255, 0.1) 36%, rgba(255, 255, 255, 0) 72%);
+    z-index: 0;
+  }
+
+  .inventory-alert-card > * { position: relative; z-index: 1; }
+  .inventory-alert-warning { border-top: 4px solid #f59e0b; }
+  .inventory-alert-success { border-top: 4px solid #16a34a; }
+  .inventory-alert-info { border-top: 4px solid #2563eb; }
+  .inventory-alert-danger { border-top: 4px solid #dc2626; }
+
+  .inventory-alert-icon {
+    width: 3.7rem;
+    height: 3.7rem;
+    border-radius: 9999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-inline: auto;
+    margin-bottom: 0.78rem;
+    border: 1px solid transparent;
+  }
+
+  .inventory-alert-icon.warning { background: linear-gradient(145deg, rgba(254, 243, 199, 0.95) 0%, rgba(253, 230, 138, 0.85) 100%); border-color: rgba(245, 158, 11, 0.4); color: #b45309; }
+  .inventory-alert-icon.success { background: linear-gradient(145deg, rgba(220, 252, 231, 0.95) 0%, rgba(187, 247, 208, 0.85) 100%); border-color: rgba(22, 163, 74, 0.4); color: #15803d; }
+  .inventory-alert-icon.info { background: linear-gradient(145deg, rgba(219, 234, 254, 0.95) 0%, rgba(191, 219, 254, 0.85) 100%); border-color: rgba(37, 99, 235, 0.4); color: #1d4ed8; }
+  .inventory-alert-icon.danger { background: linear-gradient(145deg, rgba(254, 226, 226, 0.95) 0%, rgba(254, 202, 202, 0.85) 100%); border-color: rgba(220, 38, 38, 0.4); color: #b91c1c; }
+
+  .inventory-alert-title {
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: #0f172a;
+    margin-bottom: 0.45rem;
+    letter-spacing: 0.01em;
+  }
+
+  .inventory-alert-message {
+    font-size: 0.84rem;
+    line-height: 1.35;
+    color: #475569;
+    margin-bottom: 1.15rem;
+    white-space: pre-line;
+  }
+
+  .inventory-alert-actions {
+    display: flex;
+    justify-content: center;
+    gap: 0.58rem;
+  }
+
+  .inventory-alert-btn {
+    border: 1px solid transparent;
+    border-radius: 0.72rem;
+    padding: 0.52rem 1rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
+    box-shadow: 0 10px 18px -14px rgba(15, 23, 42, 0.55);
+  }
+
+  .inventory-alert-btn:hover { transform: translateY(-1px); filter: saturate(1.05); }
+  .inventory-alert-btn-neutral { color: #334155; border-color: #cbd5e1; background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%); }
+  .inventory-alert-btn-success { color: #ffffff; border-color: #166534; background: linear-gradient(140deg, #16a34a 0%, #15803d 60%, #166534 100%); }
+  .inventory-alert-btn-primary { color: #ffffff; border-color: #1d4ed8; background: linear-gradient(140deg, #2563eb 0%, #4f46e5 60%, #4338ca 100%); }
+  .inventory-alert-btn-danger { color: #ffffff; border-color: #991b1b; background: linear-gradient(140deg, #ef4444 0%, #dc2626 60%, #b91c1c 100%); }
+
+  @keyframes toastProgress {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .toast-icon-spin { animation: spin 0.95s linear infinite; }
+</style>
+
+<div id="toastContainer" class="fixed top-4 right-4 flex flex-col gap-2.5"></div>
+
+<div id="confirmationModal" class="hidden fixed inset-0 inventory-modal-backdrop flex items-center justify-center z-[9999] p-4">
+  <div class="inventory-alert-card inventory-alert-info">
+    <div class="inventory-alert-icon info">
+      <i data-lucide="check-circle" class="w-7 h-7"></i>
+    </div>
+    <h2 id="confirmationTitle" class="inventory-alert-title">Confirm Action</h2>
+    <p id="confirmationMessage" class="inventory-alert-message">Do you want to continue?</p>
+    <div class="inventory-alert-actions">
+      <button id="confirmationCancel" type="button" class="inventory-alert-btn inventory-alert-btn-neutral">Cancel</button>
+      <button id="confirmationConfirm" type="button" class="inventory-alert-btn inventory-alert-btn-primary">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function escapeInventoryFeedbackHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function showToast(message, type = 'info', options = {}) {
+    const container = document.getElementById('toastContainer');
+    if (!container) return null;
+
+    const {
+      duration = 5000,
+      showProgress = true,
+      icon = null,
+      title = null
+    } = options;
+
+    const styles = {
+      success: { tone: 'toast-tone-success', icon: icon || 'check-circle-2', shell: 'success', title: 'Success' },
+      error: { tone: 'toast-tone-error', icon: icon || 'x-circle', shell: 'error', title: 'Error' },
+      warning: { tone: 'toast-tone-warning', icon: icon || 'alert-triangle', shell: 'warning', title: 'Warning' },
+      info: { tone: 'toast-tone-info', icon: icon || 'info', shell: 'info', title: 'Notice' },
+      loading: { tone: 'toast-tone-info', icon: icon || 'refresh-cw', shell: 'info', title: 'Working' }
+    };
+
+    const style = styles[type] || styles.info;
+    const toastId = 'toast-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+    const toast = document.createElement('div');
+
+    toast.id = toastId;
+    toast.className = 'toast ' + style.tone;
+    toast.style.setProperty('--toast-duration', duration + 'ms');
+    toast.setAttribute('role', (type === 'error' || type === 'warning') ? 'alert' : 'status');
+    toast.setAttribute('aria-live', (type === 'error' || type === 'warning') ? 'assertive' : 'polite');
+    toast.innerHTML = `
+      <div class="toast-body">
+        <div class="toast-icon-shell ${style.shell} ${type === 'loading' ? 'toast-icon-spin' : ''}">
+          <i data-lucide="${style.icon}" class="w-4 h-4"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <p class="toast-title">${escapeInventoryFeedbackHtml(title || style.title)}</p>
+          <p class="toast-message">${escapeInventoryFeedbackHtml(message)}</p>
+        </div>
+        <button type="button" onclick="hideToast('${toastId}')" class="toast-dismiss" aria-label="Dismiss notification">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      ${showProgress && type !== 'loading' ? '<div class="toast-progress"><div class="toast-progress-bar"></div></div>' : ''}
+    `;
+
+    container.appendChild(toast);
+
+    if (window.lucide) {
+      lucide.createIcons({ nodes: [toast] });
+    }
+
+    requestAnimationFrame(() => toast.classList.add('show'));
+
+    if (type !== 'loading') {
+      window.setTimeout(() => hideToast(toastId), duration);
+    }
+
+    return toastId;
+  }
+
+  function hideToast(toastId) {
+    const toast = document.getElementById(toastId);
+    if (!toast) return;
+    toast.classList.remove('show');
+    toast.classList.add('hide');
+    window.setTimeout(() => toast.remove(), 400);
+  }
+
+  function updateToast(toastId, message, type = 'success') {
+    hideToast(toastId);
+    window.setTimeout(() => showToast(message, type), 200);
+  }
+
+  let confirmationCallback = null;
+
+  function showConfirmationModal(title, message, confirmText, callback) {
+    const modal = document.getElementById('confirmationModal');
+    if (!modal) {
+      if (typeof callback === 'function' && window.confirm(message)) callback();
+      return;
+    }
+
+    const modalCard = modal.querySelector('.inventory-alert-card');
+    const iconShell = modal.querySelector('.inventory-alert-icon');
+    const icon = iconShell ? iconShell.querySelector('i') : null;
+    const titleElement = document.getElementById('confirmationTitle');
+    const messageElement = document.getElementById('confirmationMessage');
+    const confirmButton = document.getElementById('confirmationConfirm');
+    const isDestructiveAction = /(archive|delete|damaged|surrender|remove)/i.test(`${title || ''} ${confirmText || ''}`);
+
+    if (modalCard) {
+      modalCard.classList.remove('inventory-alert-info', 'inventory-alert-danger');
+      modalCard.classList.add(isDestructiveAction ? 'inventory-alert-danger' : 'inventory-alert-info');
+    }
+
+    if (iconShell) {
+      iconShell.classList.remove('info', 'danger');
+      iconShell.classList.add(isDestructiveAction ? 'danger' : 'info');
+    }
+
+    if (icon) {
+      icon.setAttribute('data-lucide', isDestructiveAction ? 'alert-triangle' : 'check-circle');
+    }
+
+    if (confirmButton) {
+      confirmButton.classList.remove('inventory-alert-btn-primary', 'inventory-alert-btn-danger');
+      confirmButton.classList.add(isDestructiveAction ? 'inventory-alert-btn-danger' : 'inventory-alert-btn-primary');
+    }
+
+    titleElement.textContent = title || 'Confirm Action';
+    messageElement.textContent = message || '';
+    confirmButton.textContent = confirmText || 'Confirm';
+
+    confirmationCallback = callback;
+    modal.classList.remove('hidden');
+
+    if (window.lucide) {
+      lucide.createIcons({ nodes: [modal] });
+    }
+  }
+
+  function closeConfirmationModal() {
+    const modal = document.getElementById('confirmationModal');
+    if (modal) modal.classList.add('hidden');
+    confirmationCallback = null;
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    const cancelBtn = document.getElementById('confirmationCancel');
+    const confirmBtn = document.getElementById('confirmationConfirm');
+    const modal = document.getElementById('confirmationModal');
+
+    if (cancelBtn) cancelBtn.addEventListener('click', closeConfirmationModal);
+
+    if (confirmBtn) {
+      confirmBtn.addEventListener('click', function () {
+        const callback = confirmationCallback;
+        closeConfirmationModal();
+        if (typeof callback === 'function') callback();
+      });
+    }
+
+    if (modal) {
+      modal.addEventListener('click', function (event) {
+        if (event.target === modal) closeConfirmationModal();
+      });
+    }
+
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') closeConfirmationModal();
+    });
+
+    const flashedMessages = {{ get_flashed_messages(with_categories=true) | tojson }};
+    if (Array.isArray(flashedMessages)) {
+      flashedMessages.forEach(([category, message]) => {
+        const normalized = category === 'success' ? 'success' : (category === 'danger' ? 'error' : category);
+        showToast(message, normalized || 'info');
+      });
+    }
+  });
+</script>

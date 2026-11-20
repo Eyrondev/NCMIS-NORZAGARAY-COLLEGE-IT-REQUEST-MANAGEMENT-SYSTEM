@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maintenance Reports — Print</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #cbd5e1;
+      --blue: #1e40af;
+      --green: #166534;
+      --green-bg: #dcfce7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 22px;
+      background: #e2e8f0;
+      color: var(--ink);
+      font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .print-toolbar {
+      max-width: 1400px;
+      margin: 0 auto 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      border: 1px solid #dbe4f0;
+      border-radius: 10px;
+      background: #ffffff;
+      box-shadow: 0 8px 20px -16px rgba(15, 23, 42, 0.5);
+    }
+
+    .print-toolbar p {
+      margin: 0;
+      color: #475569;
+      font-size: 12px;
+    }
+
+    .print-toolbar-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .print-btn,
+    .back-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .print-btn {
+      border: 1px solid #1d4ed8;
+      background: #1d4ed8;
+      color: #ffffff;
+    }
+
+    .back-btn {
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      color: #334155;
+    }
+
+    .report-page {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 26px 28px 22px;
+      background: #ffffff;
+      box-shadow: 0 18px 40px -26px rgba(15, 23, 42, 0.55);
+    }
+
+    .report-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      padding-bottom: 14px;
+      border-bottom: 2px solid var(--blue);
+    }
+
+    .college-name {
+      margin: 0;
+      color: var(--blue);
+      font-size: 22px;
+      letter-spacing: 0.03em;
+    }
+
+    .system-name {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .report-title {
+      margin: 10px 0 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .report-meta {
+      min-width: 260px;
+      text-align: right;
+      color: #475569;
+      font-size: 10.5px;
+      line-height: 1.5;
+    }
+
+    .report-meta strong {
+      color: #1e293b;
+    }
+
+    .report-meta .filters {
+      max-width: 380px;
+      margin-left: auto;
+      margin-top: 4px;
+      overflow-wrap: anywhere;
+    }
+
+    .summary-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 14px 0 12px;
+    }
+
+    .summary-chip {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 5px;
+      padding: 5px 9px;
+      border: 1px solid #dbeafe;
+      border-radius: 6px;
+      background: #f8fbff;
+      color: #475569;
+      font-size: 10.5px;
+    }
+
+    .summary-chip strong {
+      color: #1e3a8a;
+      font-size: 12px;
+    }
+
+    .status-chip {
+      display: inline-block;
+      padding: 2px 7px;
+      border: 1px solid #86efac;
+      border-radius: 999px;
+      background: var(--green-bg);
+      color: var(--green);
+      font-size: 9.5px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    thead {
+      display: table-header-group;
+    }
+
+    th {
+      padding: 7px 7px;
+      border: 1px solid #bfdbfe;
+      background: var(--blue);
+      color: #ffffff;
+      font-size: 8.5px;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-align: left;
+      text-transform: uppercase;
+      vertical-align: middle;
+    }
+
+    td {
+      padding: 7px 7px;
+      border: 1px solid var(--line);
+      font-size: 10px;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+
+    tbody tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+
+    tr {
+      page-break-inside: avoid;
+    }
+
+    .computer-name {
+      display: block;
+      color: #0f172a;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .asset-badge {
+      display: inline-block;
+      margin-left: 4px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: #dbeafe;
+      color: #1d4ed8;
+      font-size: 7.5px;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      vertical-align: middle;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 8.5px;
+    }
+
+    .components {
+      font-weight: 700;
+      color: #4c1d95;
+    }
+
+    .components-detail {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 8.5px;
+    }
+
+    .date-main {
+      font-weight: 700;
+      color: #1e293b;
+    }
+
+    .remarks {
+      color: #475569;
+      white-space: pre-wrap;
+    }
+
+    .empty-state {
+      padding: 32px 12px;
+      border: 1px solid var(--line);
+      border-top: none;
+      color: var(--muted);
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .report-footer {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 12px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 8.5px;
+    }
+
+    .report-footer p {
+      margin: 0;
+    }
+
+    @media print {
+      @page {
+        size: A4 landscape;
+        margin: 9mm;
+      }
+
+      body {
+        padding: 0;
+        background: #ffffff;
+        font-size: 10px;
+      }
+
+      .no-print {
+        display: none !important;
+      }
+
+      .report-page {
+        max-width: none;
+        margin: 0;
+        padding: 0;
+        box-shadow: none;
+      }
+
+      .college-name {
+        font-size: 18px;
+      }
+
+      .report-title {
+        font-size: 15px;
+      }
+
+      th {
+        font-size: 7.4px;
+        padding: 5px;
+      }
+
+      td {
+        font-size: 8.6px;
+        padding: 5px;
+      }
+
+      .computer-name {
+        font-size: 9.4px;
+      }
+
+      .muted,
+      .components-detail {
+        font-size: 7.6px;
+      }
+
+      .report-footer {
+        font-size: 7.4px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="print-toolbar no-print">
+    <p>Use your browser's print dialog to print this report or choose <strong>Save as PDF</strong>.</p>
+    <div class="print-toolbar-actions">
+      <a class="back-btn" href="{{ url_for('maintenance_reports_bp.maintenance_reports_page') }}">Back to Reports</a>
+      <button type="button" class="print-btn" onclick="window.print()">Print / Save as PDF</button>
+    </div>
+  </div>
+
+  <main class="report-page">
+    <header class="report-heading">
+      <div>
+        <h1 class="college-name">NORZAGARAY COLLEGE</h1>
+        <p class="system-name">IT Request Management System</p>
+        <h2 class="report-title">Maintenance Reports — Completed Maintenance Activities</h2>
+      </div>
+      <div class="report-meta">
+        <div>Generated: <strong>{{ generated_at }}</strong></div>
+        <div class="filters"><strong>Filters:</strong> {{ filter_summary }}</div>
+      </div>
+    </header>
+
+    <div class="summary-strip">
+      <span class="summary-chip"><strong>{{ stats.total }}</strong> record(s)</span>
+      <span class="summary-chip"><strong>{{ stats.assets_serviced }}</strong> asset(s) serviced</span>
+      <span class="summary-chip"><strong>{{ stats.technicians }}</strong> technician(s)</span>
+      <span class="summary-chip"><strong>{{ stats.this_month }}</strong> this month</span>
+      <span class="summary-chip">Status <span class="status-chip">Completed</span></span>
+    </div>
+
+    <table>
+      <colgroup>
+        <col style="width: 3.5%;">
+        <col style="width: 19%;">
+        <col style="width: 18%;">
+        <col style="width: 11%;">
+        <col style="width: 11%;">
+        <col style="width: 11.5%;">
+        <col style="width: 18%;">
+        <col style="width: 8%;">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Computer Information</th>
+          <th>Replaced Components</th>
+          <th>Technician</th>
+          <th>Date</th>
+          <th>Maintenance Type</th>
+          <th>Remarks</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if records|length == 0 %}
+        <tr>
+          <td colspan="8" class="empty-state">No maintenance records match the selected filters.</td>
+        </tr>
+        {% else %}
+        {% for row in records %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>
+            <span class="computer-name">{{ row.computer_name }}</span>
+            <span class="asset-badge">{{ row.asset_type_label }}</span>
+            <div class="muted">Asset #{{ row.asset_id }}{% if row.asset_serial %} · SN: {{ row.asset_serial }}{% endif %}</div>
+            <div class="muted">{{ row.report_no }}</div>
+          </td>
+          <td>
+            <div class="components">{{ row.components_headline }}</div>
+            {% if row.components_detail %}
+              <div class="components-detail">{{ row.components_detail }}</div>
+            {% endif %}
+          </td>
+          <td>{{ row.technician }}</td>
+          <td>
+            <div class="date-main">{{ row.date_display }}</div>
+            <div class="muted">{{ row.time_display }}</div>
+          </td>
+          <td>{{ row.maintenance_type }}</td>
+          <td class="remarks">{{ row.remarks or '—' }}</td>
+          <td><span class="status-chip">{{ row.status }}</span></td>
+        </tr>
+        {% endfor %}
+        {% endif %}
+      </tbody>
+    </table>
+
+    <footer class="report-footer">
+      <p><strong>Status: Completed.</strong> Every record in this report represents a completed maintenance activity. Maintenance history is read-only and cannot be edited or deleted.</p>
+      <p>Norzagaray College · IT Request Management System</p>
+    </footer>
+  </main>
+
+  <script>
+    {% if auto_print %}
+    window.addEventListener("load", function () {
+      window.setTimeout(function () {
+        window.print();
+      }, 350);
+    });
+    {% endif %}
+  </script>
+</body>
+</html>

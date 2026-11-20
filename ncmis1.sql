@@ -54,7 +54,7 @@ CREATE TABLE `borrow_requests` (
   `borrow_date` date NOT NULL,
   `return_date` date DEFAULT NULL,
   `reason` text NOT NULL,
-  `status` enum('Pending','Approved','Returned') DEFAULT 'Pending'
+  `status` enum('Pending','Approved','Returned','Cancelled','Invalid') DEFAULT 'Pending'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -424,6 +424,15 @@ CREATE TABLE `maintenance_history` (
   `asset_type` enum('PC','Device') NOT NULL,
   `asset_id` int(11) NOT NULL,
   `action` varchar(100) NOT NULL,
+  `maintenance_type` varchar(100) DEFAULT NULL,
+  `replaced_part` varchar(100) DEFAULT NULL,
+  `previous_part` text DEFAULT NULL,
+  `new_part` text DEFAULT NULL,
+  `previous_part_status` varchar(100) DEFAULT NULL,
+  `new_part_status` varchar(100) DEFAULT NULL,
+  `computer_name` varchar(255) DEFAULT NULL,
+  `asset_serial` varchar(255) DEFAULT NULL,
+  `technician` varchar(255) DEFAULT NULL,
   `remarks` text DEFAULT NULL,
   `performed_by` varchar(255) DEFAULT NULL,
   `old_status` varchar(100) DEFAULT NULL,
@@ -432,6 +441,20 @@ CREATE TABLE `maintenance_history` (
   `health_score` int(11) DEFAULT NULL,
   `performed_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Triggers `maintenance_history`
+--
+DELIMITER $$
+CREATE TRIGGER `trg_maintenance_history_immutable_update` BEFORE UPDATE ON `maintenance_history` FOR EACH ROW BEGIN
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Maintenance history is immutable and cannot be updated.';
+END
+$$
+CREATE TRIGGER `trg_maintenance_history_immutable_delete` BEFORE DELETE ON `maintenance_history` FOR EACH ROW BEGIN
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Maintenance history is immutable and cannot be deleted.';
+END
+$$
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -596,6 +619,7 @@ CREATE TABLE `pc_part_replacements` (
   `new_value` text DEFAULT NULL,
   `removed_status` varchar(32) DEFAULT NULL,
   `accession_id` int(11) DEFAULT NULL,
+  `new_accession_id` int(11) DEFAULT NULL,
   `performed_by` int(11) DEFAULT NULL,
   `remarks` text DEFAULT NULL,
   `performed_at` timestamp NOT NULL DEFAULT current_timestamp()
@@ -638,7 +662,9 @@ CREATE TABLE `tickets` (
   `title` varchar(255) DEFAULT NULL,
   `description` text DEFAULT NULL,
   `status` varchar(50) DEFAULT 'Open',
-  `created_at` datetime DEFAULT current_timestamp()
+  `created_at` datetime DEFAULT current_timestamp(),
+  `resolved_at` datetime DEFAULT NULL,
+  `resolved_by_id` int(11) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------

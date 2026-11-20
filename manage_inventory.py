@@ -1,8 +1,13 @@
-from flask import Blueprint, render_template, flash, jsonify,request
+from flask import Blueprint, render_template, flash, jsonify, request, redirect, url_for
 from db import get_db_connection
 import pymysql
-from datetime import date
+from datetime import date, datetime
 from inventory_auto_check import calculate_health_and_risk, normalize_interval_days, parse_date
+from utils.maintenance_audit import (
+    current_technician,
+    ensure_maintenance_history_schema,
+    log_maintenance_event,
+)
 
  
 
@@ -13,111 +18,923 @@ manage_inventory_bp = Blueprint('manage_inventory', __name__, template_folder='t
 ALLOWED_PER_PAGE = {5, 10, 25, 50}
 DEFAULT_PER_PAGE = 10
 
-@manage_inventory_bp.route('/manage_inventory')
-def inventory_load():
-    """Load Manage Inventory with pagination for devices."""
-    page = _normalize_page(request.args.get("page", 1, type=int))
-    item_page = _normalize_page(request.args.get("item_page", 1, type=int))
-    consumable_page = _normalize_page(request.args.get("consumable_page", 1, type=int))
-    surrendered_page = _normalize_page(request.args.get("surrendered_page", 1, type=int))
-    surrendered_item_page = _normalize_page(request.args.get("surrendered_item_page", 1, type=int))
-    per_page = _normalize_per_page(request.args.get("per_page", DEFAULT_PER_PAGE, type=int))
-    surrendered_per_page = _normalize_per_page(
-        request.args.get("surrendered_per_page", per_page, type=int)
-    )
-    surrendered_item_per_page = _normalize_per_page(
-        request.args.get("surrendered_item_per_page", per_page, type=int)
-    )
-    section = request.args.get("section", "pc")
-    
-    # Get filter parameters
-    department_id = request.args.get('department_id')
-    status = request.args.get('status')
-    accountable = request.args.get('accountable')
-    serial_no = request.args.get('serial_no')
-    item_name = request.args.get('item_name')
-    brand_model = request.args.get('brand_model')
-    device_type = request.args.get('device_type')
-    date_from = request.args.get('date_from')
-    date_to = request.args.get('date_to')
-    search = request.args.get('search')
-    
-    pc_filters = _get_pc_filters(request.args)
 
-    # PCs
-    pc_list, pc_total, pc_pages, page = get_pc_list_paginated(page, per_page, pc_filters)
-    # Surrendered PCs (separate list)
-    surrendered_pc_list, surrendered_total, surrendered_pages, surrendered_page = get_surrendered_pc_list_paginated(
-        surrendered_page,
-        surrendered_per_page,
-    )
-    # Surrendered devices/items
-    surrendered_device_list, surrendered_item_total, surrendered_item_pages, surrendered_item_page = get_surrendered_device_list_paginated(
-        surrendered_item_page,
-        surrendered_item_per_page,
-    )
-    
-    # Check if we have filter parameters for devices
-    if any([department_id, status, accountable, serial_no, item_name, brand_model, device_type, date_from, date_to]) or search:
-        item_list, item_total, item_pages, item_page = get_filtered_item_list_paginated(
-            item_page, per_page, department_id, status, accountable, serial_no, 
-            item_name, brand_model, device_type, date_from, date_to, search
+INVENTORY_CATEGORY_DEFINITIONS = {
+    "pcs": {
+        "title": "Manage PCs",
+        "singular": "PC",
+        "kind": "pc",
+        "icon": "cpu",
+        "endpoint": "manage_inventory.inventory_pcs",
+        "description": "Workstation records, assignment, health checks, and acquisition details.",
+        "empty_title": "No PCs found",
+        "empty_message": "Add a PC or adjust the current filters to see workstation records here.",
+        "default_device_type": "",
+        "status_options": ["Available", "IN USE", "Damaged", "Inactive", "Needs Checking"],
+    },
+    "components": {
+        "title": "Manage Components",
+        "singular": "Component",
+        "kind": "device",
+        "icon": "circuit-board",
+        "endpoint": "manage_inventory.inventory_components",
+        "description": "Internal hardware and replacement parts used to build, repair, and upgrade PCs.",
+        "empty_title": "No components found",
+        "empty_message": "Add a component, or classify a device by setting its item type or name to a component.",
+        "default_device_type": "Component",
+        "status_options": ["Available", "IN USE", "Damaged", "Needs Fixing", "Defective", "For Disposal", "Inactive", "Needs Checking"],
+    },
+    "peripherals": {
+        "title": "Manage Peripherals",
+        "singular": "Peripheral",
+        "kind": "device",
+        "icon": "keyboard",
+        "endpoint": "manage_inventory.inventory_peripherals",
+        "description": "External devices connected to workstations such as monitors, keyboards, printers, and network equipment.",
+        "empty_title": "No peripherals found",
+        "empty_message": "Add a peripheral, or classify a device by setting its item type or name to a peripheral.",
+        "default_device_type": "Peripheral",
+        "status_options": ["Available", "IN USE", "Damaged", "Needs Fixing", "Defective", "For Disposal", "Inactive", "Needs Checking"],
+    },
+    "consumables": {
+        "title": "Manage Consumables",
+        "singular": "Consumable",
+        "kind": "consumable",
+        "icon": "package",
+        "endpoint": "manage_inventory.inventory_consumables",
+        "description": "Stock items consumed during daily operations, with quantity and stock-level tracking.",
+        "empty_title": "No consumables found",
+        "empty_message": "Add a consumable or adjust the current filters to see stock records here.",
+        "default_device_type": "",
+        "status_options": ["Available", "Low Stock", "Out of Stock", "Damaged"],
+    },
+    "accessories": {
+        "title": "Manage Accessories",
+        "singular": "Accessory",
+        "kind": "device",
+        "icon": "cable",
+        "endpoint": "manage_inventory.inventory_accessories",
+        "description": "Cables, adapters, mounts, and other supporting items that complement devices.",
+        "empty_title": "No accessories found",
+        "empty_message": "Add an accessory, or classify a device by setting its item type or name to an accessory.",
+        "default_device_type": "Accessory",
+        "status_options": ["Available", "IN USE", "Damaged", "Needs Fixing", "Defective", "For Disposal", "Inactive", "Needs Checking"],
+    },
+}
+
+_DEVICE_CATEGORY_TYPE_VALUES = {
+    "components": ("component", "components", "part", "parts"),
+    "peripherals": ("peripheral", "peripherals"),
+    "accessories": ("accessory", "accessories"),
+}
+
+# Keyword order matters: the first matching group wins. Accessories are checked
+# first so compound names such as "Monitor Stand" or "USB-C Adapter" land in the
+# supporting-items page instead of the peripheral page.
+_DEVICE_CATEGORY_KEYWORD_GROUPS = (
+    ("accessories", (
+        "cable", "cord", "adapter", "adaptor", "dongle", "hub", "stand", "mount",
+        "bracket", "bag", "cover", "sleeve", "strap", "lock", "stylus", "pen",
+        "cleaning kit", "dust cover", "screen protector", "mousepad", "mouse pad",
+        "wrist rest", "extension", "connector", "splitter", "memory card", "sd card",
+    )),
+    ("peripherals", (
+        "monitor", "display", "keyboard", "mouse", "webcam", "camera", "speaker",
+        "headset", "headphone", "microphone", "printer", "scanner", "projector",
+        "ups", "avr", "voltage regulator", "external drive", "external ssd",
+        "external hdd", "drawing tablet", "tablet", "joystick", "gamepad",
+        "barcode scanner", "label printer", "kvm", "docking station", "dock",
+        "router", "switch", "access point", "modem", "firewall",
+    )),
+    ("components", (
+        "motherboard", "mainboard", "processor", "cpu", "ram", "memory", "ssd",
+        "hdd", "hard drive", "hard disk", "nvme", "graphics card", "gpu",
+        "video card", "power supply", "psu", "casing", "cpu cooler", "cooler",
+        "heatsink", "fan", "network card", "lan card", "sound card", "wifi card",
+        "wireless card", "battery", "cmos", "expansion card", "riser card",
+        "capture card",
+    )),
+)
+
+
+def _device_category_case_sql():
+    """Return a SQL CASE expression that assigns each device to one inventory page."""
+    clauses = []
+    for category_key, type_values in _DEVICE_CATEGORY_TYPE_VALUES.items():
+        quoted = ", ".join("'%s'" % value for value in type_values)
+        clauses.append(
+            f"WHEN LOWER(TRIM(COALESCE(device_type, ''))) IN ({quoted}) THEN '{category_key}'"
         )
+
+    clauses.extend([
+        "WHEN LOWER(TRIM(COALESCE(device_type, ''))) IN ('pc', 'computer', 'desktop', 'laptop') THEN 'devices'",
+        "WHEN LOWER(TRIM(COALESCE(device_type, ''))) = 'consumable' THEN 'consumables'",
+        "WHEN TRIM(COALESCE(device_type, '')) REGEXP '^[0-9]+$' THEN 'consumables'",
+    ])
+
+    for category_key, keywords in _DEVICE_CATEGORY_KEYWORD_GROUPS:
+        keyword_sql = " OR ".join(
+            "LOCATE('%s', LOWER(COALESCE(item_name, ''))) > 0" % keyword
+            for keyword in keywords
+        )
+        clauses.append(f"WHEN {keyword_sql} THEN '{category_key}'")
+
+    return "CASE " + " ".join(clauses) + " ELSE 'devices' END"
+
+
+_DEVICE_CATEGORY_CASE_SQL = _device_category_case_sql()
+_DEVICE_ACTIVE_WHERE = (
+    "COALESCE(df.is_archived, 0) = 0 "
+    "AND LOWER(COALESCE(df.status, '')) NOT IN ('surrendered', 'archived')"
+)
+_CONSUMABLE_BASE_WHERE = "COALESCE(c.is_archived, 0) = 0"
+_PC_ACTIVE_WHERE = (
+    "COALESCE(pc.is_archived, 0) = 0 "
+    "AND LOWER(COALESCE(pc.status, '')) != 'surrendered'"
+)
+
+
+
+def _get_inventory_stats():
+    """Aggregate the counts displayed in the Inventory mini-dashboard."""
+    stats = {
+        "pc_count": 0,
+        "item_count": 0,
+        "available": 0,
+        "damaged": 0,
+        "consumables": 0,
+        "surrendered": 0,
+        "total_value": 0.0,
+    }
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN LOWER(COALESCE(status, '')) = 'available' THEN 1 ELSE 0 END) AS available,
+                    SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('damaged', 'damage', 'unusable') THEN 1 ELSE 0 END) AS damaged,
+                    COALESCE(SUM(acquisition_cost), 0) AS asset_value
+                FROM pcinfofull
+                WHERE COALESCE(is_archived, 0) = 0
+                  AND LOWER(COALESCE(status, '')) != 'surrendered'
+            """)
+            pc_stats = cur.fetchone() or {}
+
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN LOWER(COALESCE(status, '')) = 'available' THEN 1 ELSE 0 END) AS available,
+                    SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('damaged', 'damage', 'unusable') THEN 1 ELSE 0 END) AS damaged,
+                    COALESCE(SUM(acquisition_cost), 0) AS asset_value
+                FROM devices_full
+                WHERE COALESCE(is_archived, 0) = 0
+                  AND LOWER(COALESCE(status, '')) NOT IN ('surrendered', 'archived')
+            """)
+            item_stats = cur.fetchone() or {}
+
+            cur.execute("""
+                SELECT COUNT(*) AS total
+                FROM pcinfofull
+                WHERE COALESCE(is_archived, 0) = 1
+                   OR LOWER(COALESCE(status, '')) = 'surrendered'
+            """)
+            surrendered_pcs = int((cur.fetchone() or {}).get("total") or 0)
+
+            cur.execute("""
+                SELECT COUNT(*) AS total
+                FROM devices_full
+                WHERE COALESCE(is_archived, 0) = 1
+                   OR LOWER(COALESCE(status, '')) IN ('surrendered', 'archived')
+            """)
+            surrendered_items = int((cur.fetchone() or {}).get("total") or 0)
+
+            cur.execute("""
+                SELECT COUNT(*) AS cnt
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'consumables'
+                  AND COLUMN_NAME = 'is_archived'
+            """)
+            has_consumable_archive = int((cur.fetchone() or {}).get("cnt") or 0) > 0
+            consumable_where = (
+                "WHERE COALESCE(is_archived, 0) = 0" if has_consumable_archive else ""
+            )
+            cur.execute(f"SELECT COUNT(*) AS total FROM consumables {consumable_where}")
+            consumable_total = int((cur.fetchone() or {}).get("total") or 0)
+
+            stats["pc_count"] = int(pc_stats.get("total") or 0)
+            stats["item_count"] = int(item_stats.get("total") or 0)
+            stats["available"] = int(pc_stats.get("available") or 0) + int(item_stats.get("available") or 0)
+            stats["damaged"] = int(pc_stats.get("damaged") or 0) + int(item_stats.get("damaged") or 0)
+            stats["consumables"] = consumable_total
+            stats["surrendered"] = surrendered_pcs + surrendered_items
+            stats["total_value"] = float(pc_stats.get("asset_value") or 0) + float(item_stats.get("asset_value") or 0)
+    except Exception as exc:
+        print(f"INVENTORY STATS ERROR: {exc}")
+    finally:
+        conn.close()
+
+    return stats
+
+
+def _inventory_category_meta(category_key):
+    definition = INVENTORY_CATEGORY_DEFINITIONS.get(category_key)
+    if not definition:
+        return None
+
+    meta = dict(definition)
+    meta["key"] = category_key
+    meta["add_action"] = {
+        "pc": "openPcModal()",
+        "device": "openItemModal()",
+        "consumable": "openConsumableModal()",
+    }.get(meta["kind"], "openItemModal()")
+    return meta
+
+
+def _empty_category_stats():
+    return {
+        "total": 0,
+        "total_units": 0,
+        "available": 0,
+        "in_use": 0,
+        "damaged": 0,
+        "inactive": 0,
+        "needs_checking": 0,
+        "low_stock": 0,
+        "out_of_stock": 0,
+        "total_value": 0.0,
+    }
+
+
+def _apply_category_stats_row(stats, row):
+    stats["total"] = int(row.get("total") or 0)
+    stats["total_units"] = int(row.get("total_units") or 0)
+    stats["available"] = int(row.get("available") or 0)
+    stats["in_use"] = int(row.get("in_use") or 0)
+    stats["damaged"] = int(row.get("damaged") or 0)
+    stats["inactive"] = int(row.get("inactive") or 0)
+    stats["needs_checking"] = int(row.get("needs_checking") or 0)
+    stats["low_stock"] = int(row.get("low_stock") or 0)
+    stats["out_of_stock"] = int(row.get("out_of_stock") or 0)
+    stats["total_value"] = float(row.get("total_value") or 0)
+
+
+def _get_category_stats(category_key):
+    """Return aggregate metrics for one inventory category page."""
+    stats = _empty_category_stats()
+    definition = INVENTORY_CATEGORY_DEFINITIONS.get(category_key)
+    if not definition:
+        return stats
+
+    kind = definition["kind"]
+    conn = get_db_connection()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            if kind == "pc":
+                cur.execute(f"""
+                    SELECT
+                        COUNT(*) AS total,
+                        COUNT(*) AS total_units,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(pc.status, ''))) = 'available' THEN 1 ELSE 0 END) AS available,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(pc.status, ''))) IN ('in use', 'in used', 'in-used', 'inuse') THEN 1 ELSE 0 END) AS in_use,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(pc.status, ''))) IN ('damaged', 'damage', 'unusable') THEN 1 ELSE 0 END) AS damaged,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(pc.status, ''))) = 'inactive' THEN 1 ELSE 0 END) AS inactive,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(pc.status, ''))) = 'needs checking' THEN 1 ELSE 0 END) AS needs_checking,
+                        COALESCE(SUM(pc.acquisition_cost), 0) AS total_value
+                    FROM pcinfofull pc
+                    WHERE {_PC_ACTIVE_WHERE}
+                """)
+                _apply_category_stats_row(stats, cur.fetchone() or {})
+                stats["total_units"] = stats["total"]
+
+            elif kind == "device":
+                cur.execute(f"""
+                    SELECT
+                        COUNT(*) AS total,
+                        COALESCE(SUM(CASE WHEN COALESCE(df.quantity, 0) < 1 THEN 1 ELSE df.quantity END), 0) AS total_units,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(df.status, ''))) = 'available' THEN 1 ELSE 0 END) AS available,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(df.status, ''))) IN ('in use', 'in used', 'in-used', 'inuse') THEN 1 ELSE 0 END) AS in_use,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(df.status, ''))) IN ('damaged', 'damage', 'unusable') THEN 1 ELSE 0 END) AS damaged,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(df.status, ''))) = 'inactive' THEN 1 ELSE 0 END) AS inactive,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(df.status, ''))) = 'needs checking' THEN 1 ELSE 0 END) AS needs_checking,
+                        COALESCE(SUM(df.acquisition_cost), 0) AS total_value
+                    FROM devices_full df
+                    WHERE {_DEVICE_ACTIVE_WHERE}
+                      AND ({_DEVICE_CATEGORY_CASE_SQL}) = %s
+                """, (category_key,))
+                _apply_category_stats_row(stats, cur.fetchone() or {})
+
+            else:
+                cur.execute("""
+                    SELECT COUNT(*) AS cnt
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'consumables'
+                      AND COLUMN_NAME = 'is_archived'
+                """)
+                has_archive = int((cur.fetchone() or {}).get("cnt") or 0) > 0
+                archive_where = f"WHERE {_CONSUMABLE_BASE_WHERE}" if has_archive else ""
+
+                cur.execute(f"""
+                    SELECT
+                        COUNT(*) AS total,
+                        COALESCE(SUM(COALESCE(c.quantity, 0)), 0) AS total_units,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(c.status, ''))) = 'available' THEN 1 ELSE 0 END) AS available,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(c.status, ''))) = 'low stock' THEN 1 ELSE 0 END) AS low_stock,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(c.status, ''))) = 'out of stock' THEN 1 ELSE 0 END) AS out_of_stock,
+                        SUM(CASE WHEN LOWER(TRIM(COALESCE(c.status, ''))) = 'damaged' THEN 1 ELSE 0 END) AS damaged
+                    FROM consumables c
+                    {archive_where}
+                """)
+                _apply_category_stats_row(stats, cur.fetchone() or {})
+
+    except Exception as exc:
+        print(f"INVENTORY CATEGORY STATS ERROR [{category_key}]: {exc}")
+    finally:
+        conn.close()
+
+    return stats
+
+
+def _finalize_breakdown_rows(rows, total):
+    finalized = []
+    for row in rows:
+        count = int(row.get("count") or 0)
+        units = int(row.get("units") or 0) or count
+        value = float(row.get("value") or 0)
+        finalized.append({
+            "label": row.get("label") or "Unspecified",
+            "count": count,
+            "units": units,
+            "value": value,
+            "percent": round((count / total) * 100, 1) if total else 0.0,
+        })
+    return finalized
+
+
+def _get_category_report(category_key, stats):
+    """Build the category-only report shown under the table."""
+    definition = INVENTORY_CATEGORY_DEFINITIONS.get(category_key)
+    if not definition:
+        return {"generated_at": "", "summary": [], "breakdowns": []}
+
+    kind = definition["kind"]
+    total = stats["total"]
+    breakdowns = []
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            if kind == "pc":
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(NULLIF(TRIM(pc.status), ''), 'Unspecified') AS label,
+                        COUNT(*) AS count,
+                        COUNT(*) AS units,
+                        COALESCE(SUM(pc.acquisition_cost), 0) AS value
+                    FROM pcinfofull pc
+                    WHERE {_PC_ACTIVE_WHERE}
+                    GROUP BY COALESCE(NULLIF(TRIM(pc.status), ''), 'Unspecified')
+                    ORDER BY count DESC
+                """)
+                status_rows = _finalize_breakdown_rows(cur.fetchall(), total)
+
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(NULLIF(TRIM(dep.department_name), ''), 'Unassigned') AS label,
+                        COUNT(*) AS count,
+                        COUNT(*) AS units,
+                        COALESCE(SUM(pc.acquisition_cost), 0) AS value
+                    FROM pcinfofull pc
+                    LEFT JOIN departments dep ON pc.department_id = dep.department_id
+                    WHERE {_PC_ACTIVE_WHERE}
+                    GROUP BY COALESCE(NULLIF(TRIM(dep.department_name), ''), 'Unassigned')
+                    ORDER BY count DESC
+                    LIMIT 10
+                """)
+                department_rows = _finalize_breakdown_rows(cur.fetchall(), total)
+
+                cur.execute(f"""
+                    SELECT
+                        CASE
+                            WHEN LOWER(TRIM(COALESCE(pc.status, ''))) IN ('damaged', 'damage', 'unusable') THEN 'High'
+                            WHEN COALESCE(TRIM(pc.risk_level), '') = '' THEN 'Unspecified'
+                            ELSE pc.risk_level
+                        END AS label,
+                        COUNT(*) AS count,
+                        COUNT(*) AS units,
+                        COALESCE(SUM(pc.acquisition_cost), 0) AS value
+                    FROM pcinfofull pc
+                    WHERE {_PC_ACTIVE_WHERE}
+                    GROUP BY label
+                    ORDER BY count DESC
+                """)
+                risk_rows = _finalize_breakdown_rows(cur.fetchall(), total)
+
+                breakdowns = [
+                    {"title": "By status", "rows": status_rows, "show_units": False, "show_value": True},
+                    {"title": "By office / facility", "rows": department_rows, "show_units": False, "show_value": True},
+                    {"title": "By risk level", "rows": risk_rows, "show_units": False, "show_value": True},
+                ]
+
+            elif kind == "device":
+                base_from = f"""
+                    FROM devices_full df
+                    LEFT JOIN departments dep ON df.department_id = dep.department_id
+                    WHERE {_DEVICE_ACTIVE_WHERE}
+                      AND ({_DEVICE_CATEGORY_CASE_SQL}) = %s
+                """
+
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(NULLIF(TRIM(df.status), ''), 'Unspecified') AS label,
+                        COUNT(*) AS count,
+                        COALESCE(SUM(CASE WHEN COALESCE(df.quantity, 0) < 1 THEN 1 ELSE df.quantity END), 0) AS units,
+                        COALESCE(SUM(df.acquisition_cost), 0) AS value
+                    {base_from}
+                    GROUP BY COALESCE(NULLIF(TRIM(df.status), ''), 'Unspecified')
+                    ORDER BY count DESC
+                """, (category_key,))
+                status_rows = _finalize_breakdown_rows(cur.fetchall(), total)
+
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(NULLIF(TRIM(df.item_name), ''), 'Unspecified') AS label,
+                        COUNT(*) AS count,
+                        COALESCE(SUM(CASE WHEN COALESCE(df.quantity, 0) < 1 THEN 1 ELSE df.quantity END), 0) AS units,
+                        COALESCE(SUM(df.acquisition_cost), 0) AS value
+                    {base_from}
+                    GROUP BY COALESCE(NULLIF(TRIM(df.item_name), ''), 'Unspecified')
+                    ORDER BY count DESC, units DESC
+                    LIMIT 10
+                """, (category_key,))
+                item_rows = _finalize_breakdown_rows(cur.fetchall(), total)
+
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(NULLIF(TRIM(dep.department_name), ''), 'Unassigned') AS label,
+                        COUNT(*) AS count,
+                        COALESCE(SUM(CASE WHEN COALESCE(df.quantity, 0) < 1 THEN 1 ELSE df.quantity END), 0) AS units,
+                        COALESCE(SUM(df.acquisition_cost), 0) AS value
+                    {base_from}
+                    GROUP BY COALESCE(NULLIF(TRIM(dep.department_name), ''), 'Unassigned')
+                    ORDER BY count DESC
+                    LIMIT 10
+                """, (category_key,))
+                department_rows = _finalize_breakdown_rows(cur.fetchall(), total)
+
+                breakdowns = [
+                    {"title": "By status", "rows": status_rows, "show_units": True, "show_value": True},
+                    {"title": "By item", "rows": item_rows, "show_units": True, "show_value": True},
+                    {"title": "By office / facility", "rows": department_rows, "show_units": True, "show_value": True},
+                ]
+
+            else:
+                cur.execute("""
+                    SELECT COUNT(*) AS cnt
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'consumables'
+                      AND COLUMN_NAME = 'is_archived'
+                """)
+                has_archive = int((cur.fetchone() or {}).get("cnt") or 0) > 0
+                archive_where = f"WHERE {_CONSUMABLE_BASE_WHERE}" if has_archive else ""
+
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(NULLIF(TRIM(c.status), ''), 'Unspecified') AS label,
+                        COUNT(*) AS count,
+                        COALESCE(SUM(COALESCE(c.quantity, 0)), 0) AS units,
+                        0 AS value
+                    FROM consumables c
+                    {archive_where}
+                    GROUP BY COALESCE(NULLIF(TRIM(c.status), ''), 'Unspecified')
+                    ORDER BY count DESC
+                """)
+                status_rows = _finalize_breakdown_rows(cur.fetchall(), total)
+
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(NULLIF(TRIM(c.item_name), ''), 'Unspecified') AS label,
+                        COUNT(*) AS count,
+                        COALESCE(SUM(COALESCE(c.quantity, 0)), 0) AS units,
+                        0 AS value
+                    FROM consumables c
+                    {archive_where}
+                    GROUP BY COALESCE(NULLIF(TRIM(c.item_name), ''), 'Unspecified')
+                    ORDER BY units DESC, count DESC
+                    LIMIT 10
+                """)
+                item_rows = _finalize_breakdown_rows(cur.fetchall(), total)
+
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(NULLIF(TRIM(dep.department_name), ''), 'Unassigned') AS label,
+                        COUNT(*) AS count,
+                        COALESCE(SUM(COALESCE(c.quantity, 0)), 0) AS units,
+                        0 AS value
+                    FROM consumables c
+                    LEFT JOIN departments dep ON c.department_id = dep.department_id
+                    {archive_where}
+                    GROUP BY COALESCE(NULLIF(TRIM(dep.department_name), ''), 'Unassigned')
+                    ORDER BY units DESC, count DESC
+                    LIMIT 10
+                """)
+                department_rows = _finalize_breakdown_rows(cur.fetchall(), total)
+
+                breakdowns = [
+                    {"title": "By status", "rows": status_rows, "show_units": True, "show_value": False},
+                    {"title": "By item", "rows": item_rows, "show_units": True, "show_value": False},
+                    {"title": "By office / facility", "rows": department_rows, "show_units": True, "show_value": False},
+                ]
+
+    except Exception as exc:
+        print(f"INVENTORY CATEGORY REPORT ERROR [{category_key}]: {exc}")
+    finally:
+        conn.close()
+
+    summary = [
+        {"label": "Total records", "value": stats["total"]},
+        {"label": "Total units", "value": stats["total_units"]},
+        {"label": "Available", "value": stats["available"]},
+    ]
+    if kind == "consumable":
+        summary.extend([
+            {"label": "Low stock", "value": stats["low_stock"]},
+            {"label": "Out of stock", "value": stats["out_of_stock"]},
+            {"label": "Damaged", "value": stats["damaged"]},
+        ])
     else:
-        item_list, item_total, item_pages, item_page = get_item_list_paginated(item_page, per_page)
-     
-    # Consumables (paginated)
-    consumables, consumable_total, consumable_pages, consumable_page = get_consumables_list_paginated(
-        page=consumable_page,
-        per_page=per_page,
-        department_id=department_id,
-        status=status,
-        accountable=accountable,
-        item_name=item_name,
-        brand_model=brand_model,
-        date_from=date_from,
-        date_to=date_to,
-        search=search
-    )
-    
-    # Load departments for filters
+        summary.extend([
+            {"label": "In use", "value": stats["in_use"]},
+            {"label": "Damaged", "value": stats["damaged"]},
+            {"label": "Acquisition value", "value": round(stats["total_value"], 2), "currency": True},
+        ])
+
+    return {
+        "generated_at": datetime.now().strftime("%b %d, %Y %I:%M %p"),
+        "summary": summary,
+        "breakdowns": breakdowns,
+    }
+
+
+def _build_category_stat_cards(category_key, stats):
+    kind = INVENTORY_CATEGORY_DEFINITIONS[category_key]["kind"]
+
+    if kind == "pc":
+        return [
+            {"label": "Total PCs", "value": f"{stats['total']:,}", "icon": "cpu", "tone": "blue"},
+            {"label": "Available", "value": f"{stats['available']:,}", "icon": "check-circle-2", "tone": "emerald"},
+            {"label": "In use", "value": f"{stats['in_use']:,}", "icon": "monitor", "tone": "sky"},
+            {"label": "Damaged", "value": f"{stats['damaged']:,}", "icon": "alert-triangle", "tone": "rose"},
+            {"label": "Asset value", "value": f"₱{stats['total_value']:,.0f}", "icon": "wallet", "tone": "amber"},
+        ]
+
+    if kind == "device":
+        return [
+            {"label": "Records", "value": f"{stats['total']:,}", "icon": "boxes", "tone": "indigo"},
+            {"label": "Units", "value": f"{stats['total_units']:,}", "icon": "layers", "tone": "violet"},
+            {"label": "Available", "value": f"{stats['available']:,}", "icon": "check-circle-2", "tone": "emerald"},
+            {"label": "In use", "value": f"{stats['in_use']:,}", "icon": "monitor", "tone": "sky"},
+            {"label": "Damaged", "value": f"{stats['damaged']:,}", "icon": "alert-triangle", "tone": "rose"},
+            {"label": "Asset value", "value": f"₱{stats['total_value']:,.0f}", "icon": "wallet", "tone": "amber"},
+        ]
+
+    return [
+        {"label": "Item types", "value": f"{stats['total']:,}", "icon": "package", "tone": "green"},
+        {"label": "Total quantity", "value": f"{stats['total_units']:,}", "icon": "boxes", "tone": "teal"},
+        {"label": "Available", "value": f"{stats['available']:,}", "icon": "check-circle-2", "tone": "emerald"},
+        {"label": "Low stock", "value": f"{stats['low_stock']:,}", "icon": "alert-triangle", "tone": "amber"},
+        {"label": "Out of stock", "value": f"{stats['out_of_stock']:,}", "icon": "package-x", "tone": "rose"},
+        {"label": "Damaged", "value": f"{stats['damaged']:,}", "icon": "shield-alert", "tone": "red"},
+    ]
+
+
+def _build_category_pagination(endpoint, page, per_page, total_items, total_pages, filter_args):
+    total_pages = max(1, int(total_pages or 0))
+    page = _clamp_page(page, total_pages)
+    total_items = int(total_items or 0)
+
+    window_start = max(1, page - 2)
+    window_end = min(total_pages, page + 2)
+    if window_end - window_start < 4:
+        if window_start == 1:
+            window_end = min(total_pages, window_start + 4)
+        elif window_end == total_pages:
+            window_start = max(1, window_end - 4)
+
+    def page_url(target_page):
+        args = dict(filter_args)
+        args["page"] = target_page
+        args["per_page"] = per_page
+        return url_for(endpoint, **args)
+
+    pages = [
+        {"number": number, "url": page_url(number), "active": number == page}
+        for number in range(window_start, window_end + 1)
+    ]
+
+    return {
+        "page": page,
+        "per_page": per_page,
+        "total_items": total_items,
+        "total_pages": total_pages,
+        "pages": pages,
+        "prev_url": page_url(page - 1) if page > 1 else None,
+        "next_url": page_url(page + 1) if page < total_pages else None,
+        "first_index": ((page - 1) * per_page + 1) if total_items else 0,
+        "last_index": min(page * per_page, total_items) if total_items else 0,
+    }
+
+
+def get_device_category_list_paginated(category_key, page=1, per_page=10, filters=None):
+    """Fetch devices assigned to one category page, with filters and pagination."""
+    page = _normalize_page(page)
+    per_page = _normalize_per_page(per_page)
+    filters = filters or {}
+
+    where_clauses = [
+        _DEVICE_ACTIVE_WHERE,
+        f"({_DEVICE_CATEGORY_CASE_SQL}) = %s",
+    ]
+    params = [category_key]
+
+    department_id = filters.get("department_id")
+    status = filters.get("status")
+    item_name = filters.get("item_name")
+    brand_model = filters.get("brand_model")
+    accountable = filters.get("accountable")
+    date_from = filters.get("date_from")
+    date_to = filters.get("date_to")
+    search = filters.get("search")
+
+    if department_id:
+        where_clauses.append("df.department_id = %s")
+        params.append(department_id)
+    if status:
+        where_clauses.append("df.status = %s")
+        params.append(status)
+    if item_name:
+        where_clauses.append("df.item_name LIKE %s")
+        params.append(f"%{item_name}%")
+    if brand_model:
+        where_clauses.append("df.brand_model LIKE %s")
+        params.append(f"%{brand_model}%")
+    if accountable:
+        where_clauses.append("df.accountable LIKE %s")
+        params.append(f"%{accountable}%")
+    if date_from and date_to:
+        where_clauses.append("df.date_acquired BETWEEN %s AND %s")
+        params.extend([date_from, date_to])
+    elif date_from:
+        where_clauses.append("df.date_acquired >= %s")
+        params.append(date_from)
+    elif date_to:
+        where_clauses.append("df.date_acquired <= %s")
+        params.append(date_to)
+
+    if search:
+        where_clauses.append(
+            "(df.accession_id LIKE %s OR df.item_name LIKE %s OR df.brand_model LIKE %s "
+            "OR df.serial_no LIKE %s OR df.municipal_serial_no LIKE %s OR df.accountable LIKE %s "
+            "OR dep.department_name LIKE %s)"
+        )
+        params.extend([f"%{search}%"] * 7)
+
+    where_sql = " WHERE " + " AND ".join(where_clauses)
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS total
+                FROM devices_full df
+                LEFT JOIN departments dep ON df.department_id = dep.department_id
+                {where_sql}
+                """,
+                params,
+            )
+            total_items = int((cur.fetchone() or {}).get("total") or 0)
+
+            total_pages = (total_items + per_page - 1) // per_page
+            page = _clamp_page(page, total_pages)
+            offset = (page - 1) * per_page
+
+            cur.execute(
+                f"""
+                SELECT
+                    df.accession_id AS accession_id,
+                    df.item_name,
+                    df.brand_model,
+                    df.serial_no,
+                    df.municipal_serial_no,
+                    df.quantity,
+                    df.device_type,
+                    df.acquisition_cost,
+                    df.date_acquired,
+                    df.accountable,
+                    df.department_id,
+                    dep.department_name,
+                    df.status,
+                    df.updated_at,
+                    CASE WHEN LOWER(TRIM(df.status)) IN ('damaged', 'damage', 'unusable') THEN 'High' ELSE df.risk_level END AS risk_level,
+                    df.health_score,
+                    df.last_checked,
+                    df.maintenance_interval_days
+                FROM devices_full df
+                LEFT JOIN departments dep ON df.department_id = dep.department_id
+                {where_sql}
+                ORDER BY df.updated_at DESC, df.accession_id DESC
+                LIMIT %s OFFSET %s
+                """,
+                params + [per_page, offset],
+            )
+            items = cur.fetchall()
+
+        _apply_precise_health_scores(items)
+        return items, total_items, total_pages, page
+
+    except Exception as exc:
+        print(f"INVENTORY DEVICE CATEGORY ERROR [{category_key}]: {exc}")
+        return [], 0, 0, 1
+
+    finally:
+        conn.close()
+
+
+def _render_inventory_category(category_key):
+    meta = _inventory_category_meta(category_key)
+    if not meta:
+        flash("Unknown inventory category.", "danger")
+        return redirect(url_for("manage_inventory.inventory_pcs"))
+
+    kind = meta["kind"]
+    page = _normalize_page(request.args.get("page", 1, type=int))
+    per_page = _normalize_per_page(request.args.get("per_page", DEFAULT_PER_PAGE, type=int))
+
+    filters = {
+        "search": (request.args.get("search") or "").strip(),
+        "status": (request.args.get("status") or "").strip(),
+        "department_id": (request.args.get("department_id") or "").strip(),
+        "item_name": (request.args.get("item_name") or "").strip(),
+        "brand_model": (request.args.get("brand_model") or "").strip(),
+        "accountable": (request.args.get("accountable") or "").strip(),
+        "date_from": (request.args.get("date_from") or "").strip(),
+        "date_to": (request.args.get("date_to") or "").strip(),
+    }
+
     departments = get_departments_list()
-     
-    if pc_list is None or item_list is None:
-        flash("Error loading data. Please try again.", "danger")
+    stats = _get_category_stats(category_key)
+    report = _get_category_report(category_key, stats)
+
+    seen_statuses = set()
+    status_options = []
+    reported_statuses = []
+    if report.get("breakdowns"):
+        reported_statuses = [row.get("label") for row in report["breakdowns"][0].get("rows", [])]
+    for option in list(meta["status_options"]) + reported_statuses:
+        if not option:
+            continue
+        key = str(option).strip().lower()
+        if not key or key in ("surrendered", "archived") or key in seen_statuses:
+            continue
+        seen_statuses.add(key)
+        status_options.append(option)
+
+    pc_list = []
+    item_list = []
+    consumable_list = []
+
+    if kind == "pc":
+        pc_filters = {
+            "department_id": filters["department_id"] or None,
+            "status": filters["status"] or None,
+            "accountable": filters["accountable"] or None,
+            "search": filters["search"] or None,
+            "date_from": filters["date_from"] or None,
+            "date_to": filters["date_to"] or None,
+        }
+        pc_list, total_items, total_pages, page = get_pc_list_paginated(page, per_page, pc_filters)
+
+    elif kind == "device":
+        item_list, total_items, total_pages, page = get_device_category_list_paginated(
+            category_key,
+            page,
+            per_page,
+            filters,
+        )
+
+    else:
+        consumable_list, total_items, total_pages, page = get_consumables_list_paginated(
+            page=page,
+            per_page=per_page,
+            department_id=filters["department_id"] or None,
+            status=filters["status"] or None,
+            accountable=filters["accountable"] or None,
+            item_name=filters["item_name"] or None,
+            brand_model=filters["brand_model"] or None,
+            date_from=filters["date_from"] or None,
+            date_to=filters["date_to"] or None,
+            search=filters["search"] or None,
+        )
+
+    filter_hidden = {key: value for key, value in filters.items() if value}
+    pagination = _build_category_pagination(
+        request.endpoint,
+        page,
+        per_page,
+        total_items,
+        total_pages,
+        filter_hidden,
+    )
 
     return render_template(
-        'manage_inventory.html',
+        "inventory_category.html",
+        category=meta,
+        stat_cards=_build_category_stat_cards(category_key, stats),
+        stats=stats,
+        report=report,
         pc_list=pc_list,
-        surrendered_pc_list=surrendered_pc_list,
-        surrendered_device_list=surrendered_device_list,
         item_list=item_list,
-        consumables=consumables,
+        consumable_list=consumable_list,
         departments=departments,
-
-        page=page,
-        item_page=item_page,
-        consumable_page=consumable_page,
-        surrendered_page=surrendered_page,
-        surrendered_item_page=surrendered_item_page,
+        filters=filters,
+        filter_hidden=filter_hidden,
+        status_options=status_options,
+        pagination=pagination,
         per_page=per_page,
-        surrendered_per_page=surrendered_per_page,
-        surrendered_item_per_page=surrendered_item_per_page,
-        section=section,
-
-        pc_total_items=pc_total,
-        pc_total_pages=pc_pages,
-        surrendered_total_items=surrendered_total,
-        surrendered_total_pages=surrendered_pages,
-        surrendered_item_total_items=surrendered_item_total,
-        surrendered_item_total_pages=surrendered_item_pages,
-
-        total_items=item_total,
-        total_pages=item_pages,
-
-        consumable_total_items=consumable_total,
-        consumable_total_pages=consumable_pages
+        per_page_options=sorted(ALLOWED_PER_PAGE),
+        total_items=total_items,
+        total_pages=pagination["total_pages"],
+        reset_url=url_for(request.endpoint),
     )
+
+
+@manage_inventory_bp.route("/manage_inventory")
+def inventory_load():
+    """Redirect legacy inventory links to the dedicated category pages."""
+    section = (request.args.get("section") or "").strip().lower()
+    preserved = request.args.to_dict(flat=True)
+    preserved.pop("section", None)
+
+    if section in ("item", "items", "device", "devices"):
+        device_args = {
+            key: value
+            for key, value in preserved.items()
+            if key not in ("item_page", "consumable_page", "page")
+        }
+        item_page = preserved.get("item_page") or preserved.get("page")
+        if item_page:
+            device_args["page"] = item_page
+        device_args["tab"] = "inventory"
+        return redirect(url_for("manage_device_bp.device_page", **device_args))
+
+    if section in ("consumable", "consumables"):
+        consumable_args = {
+            key: value
+            for key, value in preserved.items()
+            if key not in ("consumable_page", "item_page", "page")
+        }
+        consumable_page = preserved.get("consumable_page") or preserved.get("page")
+        if consumable_page:
+            consumable_args["page"] = consumable_page
+        return redirect(url_for("manage_inventory.inventory_consumables", **consumable_args))
+
+    return redirect(url_for("manage_inventory.inventory_pcs", **preserved))
+
+
+@manage_inventory_bp.route("/inventory")
+def inventory_home():
+    return redirect(url_for("manage_inventory.inventory_pcs"))
+
+
+@manage_inventory_bp.route("/inventory/pcs")
+def inventory_pcs():
+    return _render_inventory_category("pcs")
+
+
+@manage_inventory_bp.route("/inventory/components")
+def inventory_components():
+    return _render_inventory_category("components")
+
+
+@manage_inventory_bp.route("/inventory/peripherals")
+def inventory_peripherals():
+    return _render_inventory_category("peripherals")
+
+
+@manage_inventory_bp.route("/inventory/consumables")
+def inventory_consumables():
+    return _render_inventory_category("consumables")
+
+
+@manage_inventory_bp.route("/inventory/accessories")
+def inventory_accessories():
+    return _render_inventory_category("accessories")
 
 def _normalize_page(value, default=1):
     try:
@@ -158,7 +975,7 @@ def pcs_paged():
     pcs, total_items, total_pages, page = get_pc_list_paginated(page, per_page, pc_filters)
     request_source = request.headers.get('X-Request-Source', 'none')
     request_key = request.headers.get('X-Page-Request', 'none')
-    print(f"📦 [pcs_paged] source={request_source} request_key={request_key} section={request.args.get('section')} page={page} per_page={per_page} total_items={total_items} total_pages={total_pages} filters={pc_filters}")
+    print(f"[pcs_paged] source={request_source} request_key={request_key} section={request.args.get('section')} page={page} per_page={per_page} total_items={total_items} total_pages={total_pages} filters={pc_filters}")
 
     return jsonify({
         "pcs": pcs,
@@ -478,7 +1295,7 @@ def items_paged():
         items, total_items, total_pages, page = get_item_list_paginated(page, per_page)
 
     print(
-        f"📦 [items_paged] source={request_source} request_key={request_key} section={request.args.get('section')} "
+        f"[items_paged] source={request_source} request_key={request_key} section={request.args.get('section')} "
         f"page={page} per_page={per_page} total_items={total_items} total_pages={total_pages} "
         f"filters={{'department_id': {department_id}, 'status': {status}, 'accountable': {accountable}, 'serial_no': {serial_no}, 'item_name': {item_name}, 'brand_model': {brand_model}, 'device_type': {device_type}, 'date_from': {date_from}, 'date_to': {date_to}}}"
     )
@@ -711,6 +1528,7 @@ def get_consumables_list_paginated(page=1, per_page=10, department_id=None, stat
                 SELECT COUNT(*) AS total
                 FROM consumables c
                 LEFT JOIN devices_full df ON df.accession_id = c.accession_id
+                LEFT JOIN departments dep ON c.department_id = dep.department_id
                 """ + where_sql,
                 params
             )
@@ -1434,12 +2252,15 @@ def get_pc_by_id(pcid):
                     p.status,
                     p.note,
                     p.maintenance_interval_days,
+                    p.monitor,
                     p.motherboard,
                     p.ram,
                     p.storage,
                     p.gpu,
                     p.psu,
                     p.casing,
+                    p.mouse,
+                    p.keyboard,
                     p.other_parts
                 FROM pcinfofull p
                 LEFT JOIN departments d ON p.department_id = d.department_id
@@ -2055,6 +2876,12 @@ def apply_maintenance_overdue_rules():
 def mark_pc_checked(pcid):
     conn = get_db_connection()
     try:
+        # Prepare the immutable audit schema before the write transaction.
+        try:
+            ensure_maintenance_history_schema(conn)
+        except Exception as schema_error:
+            print(f"[mark_pc_checked] maintenance schema error: {schema_error}")
+
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute("""
                 SELECT status, risk_level
@@ -2062,6 +2889,9 @@ def mark_pc_checked(pcid):
                 WHERE pcid = %s
             """, (pcid,))
             old = cur.fetchone()
+
+            if not old:
+                return jsonify(success=False, error="Asset not found"), 404
 
             cur.execute("""
                 UPDATE pcinfofull
@@ -2090,23 +2920,22 @@ def mark_pc_checked(pcid):
                 old['status'],
                 old['risk_level']
             ))
-            cur.execute("""
-                INSERT INTO maintenance_history (
-                    pcid, asset_type, asset_id,
-                    action, old_status, new_status,
-                    risk_level, health_score, performed_by, remarks
-                ) VALUES (
-                    %s, 'PC', %s,
-                    'Manual inspection completed', %s, 'Available',
-                    'Low', 100, %s, %s
-                )
-            """, (
-                pcid,
-                pcid,
-                old['status'],
-                'System',   # you can replace 'System' with current user if available
-                'Marked as checked manually'
-            ))
+            technician = current_technician()
+            log_maintenance_event(
+                cur,
+                asset_type='PC',
+                asset_id=pcid,
+                pcid=pcid,
+                action='Manual inspection completed',
+                maintenance_type='Inspection',
+                old_status=old['status'],
+                new_status='Available',
+                risk_level='Low',
+                health_score=100,
+                technician=technician,
+                performed_by=technician,
+                remarks='Marked as checked manually',
+            )
 
         conn.commit()
         return jsonify(success=True)
@@ -2124,32 +2953,100 @@ def maintenance_history():
     asset_type = (request.args.get('type') or '').strip().upper()
 
     if not asset_id or not asset_type:
-        return render_template('maintenance_history.html', logs=[])
+        return render_template(
+            'maintenance_history.html', logs=[], asset_id=None, asset_type=None
+        )
 
     conn = get_db_connection()
+    try:
+        ensure_maintenance_history_schema(conn)
+    except Exception as schema_error:
+        print(f"[maintenance-history] maintenance schema error: {schema_error}")
+
     with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        # The immutable maintenance_history table is the source of truth.
+        # Legacy maintenance_logs rows are still shown when no matching
+        # maintenance_history record exists, so older deployments keep their
+        # per-asset trail.
         cur.execute("""
-            SELECT
-                ml.*,
-                CASE
-                    WHEN LOWER(TRIM(ml.previous_status)) IN ('damaged', 'damage', 'unusable') THEN 'High'
-                    WHEN ml.previous_risk_level IS NULL OR TRIM(ml.previous_risk_level) = '' THEN '--'
-                    ELSE ml.previous_risk_level
-                END AS effective_previous_risk_level,
-                CASE
-                    WHEN LOWER(TRIM(ml.new_status)) IN ('damaged', 'damage', 'unusable') THEN 'High'
-                    WHEN ml.new_risk_level IS NULL OR TRIM(ml.new_risk_level) = '' THEN '--'
-                    ELSE ml.new_risk_level
-                END AS effective_new_risk_level
-            FROM maintenance_logs ml
-            WHERE UPPER(TRIM(ml.asset_type)) = %s
-              AND ml.asset_id = %s
+            SELECT * FROM (
+                SELECT
+                    mh.performed_at,
+                    mh.action,
+                    COALESCE(mh.maintenance_type, mh.action) AS maintenance_type,
+                    mh.replaced_part,
+                    mh.previous_part,
+                    mh.new_part,
+                    mh.previous_part_status,
+                    mh.new_part_status,
+                    COALESCE(mh.computer_name, pc.pcname, df.item_name) AS computer_name,
+                    COALESCE(mh.asset_serial, pc.serial_no, df.serial_no) AS asset_serial,
+                    COALESCE(mh.technician, mh.performed_by) AS technician,
+                    mh.old_status AS previous_status,
+                    mh.new_status,
+                    mh.risk_level AS new_risk_level,
+                    mh.performed_by,
+                    mh.remarks,
+                    0 AS is_legacy
+                FROM maintenance_history mh
+                LEFT JOIN pcinfofull pc
+                    ON UPPER(TRIM(mh.asset_type)) = 'PC'
+                   AND mh.asset_id = pc.pcid
+                LEFT JOIN devices_full df
+                    ON UPPER(TRIM(mh.asset_type)) = 'DEVICE'
+                   AND mh.asset_id = df.accession_id
+                WHERE UPPER(TRIM(mh.asset_type)) = %s
+                  AND mh.asset_id = %s
+
+                UNION ALL
+
+                SELECT
+                    ml.performed_at,
+                    ml.action,
+                    ml.action AS maintenance_type,
+                    NULL AS replaced_part,
+                    NULL AS previous_part,
+                    NULL AS new_part,
+                    NULL AS previous_part_status,
+                    NULL AS new_part_status,
+                    COALESCE(pc.pcname, df.item_name) AS computer_name,
+                    COALESCE(pc.serial_no, df.serial_no) AS asset_serial,
+                    ml.performed_by AS technician,
+                    ml.previous_status,
+                    ml.new_status,
+                    ml.new_risk_level,
+                    ml.performed_by,
+                    ml.remarks,
+                    1 AS is_legacy
+                FROM maintenance_logs ml
+                LEFT JOIN pcinfofull pc
+                    ON UPPER(TRIM(ml.asset_type)) = 'PC'
+                   AND ml.asset_id = pc.pcid
+                LEFT JOIN devices_full df
+                    ON UPPER(TRIM(ml.asset_type)) = 'DEVICE'
+                   AND ml.asset_id = df.accession_id
+                WHERE UPPER(TRIM(ml.asset_type)) = %s
+                  AND ml.asset_id = %s
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM maintenance_history mh2
+                      WHERE UPPER(TRIM(mh2.asset_type)) = UPPER(TRIM(ml.asset_type))
+                        AND mh2.asset_id = ml.asset_id
+                        AND mh2.action = ml.action
+                        AND DATE(mh2.performed_at) = DATE(ml.performed_at)
+                  )
+            ) combined
             ORDER BY performed_at DESC
-        """, (asset_type, asset_id))
+        """, (asset_type, asset_id, asset_type, asset_id))
         logs = cur.fetchall()
 
     conn.close()
-    return render_template('maintenance_history.html', logs=logs)
+    return render_template(
+        'maintenance_history.html',
+        logs=logs,
+        asset_id=asset_id,
+        asset_type=asset_type,
+    )
 
 @manage_inventory_bp.route('/inventory/<string:asset_type>/<int:asset_id>/check', methods=['POST'])
 def mark_asset_checked(asset_type, asset_id):
@@ -2159,6 +3056,12 @@ def mark_asset_checked(asset_type, asset_id):
 
     if route_asset_type not in ['PC', 'DEVICE']:
         return jsonify(success=False, error="Invalid asset type"), 400
+
+    # Prepare the immutable audit schema before the write transaction.
+    try:
+        ensure_maintenance_history_schema(conn)
+    except Exception as schema_error:
+        print(f"[mark_asset_checked] maintenance schema error: {schema_error}")
 
     try:
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
@@ -2217,36 +3120,22 @@ def mark_asset_checked(asset_type, asset_id):
             ))
 
             # ---------- MAINTENANCE HISTORY ----------
-            cur.execute("""
-                INSERT INTO maintenance_history (
-                    pcid,
-                    asset_type,
-                    asset_id,
-                    action,
-                    old_status,
-                    new_status,
-                    risk_level,
-                    health_score,
-                    performed_by,
-                    remarks
-                ) VALUES (
-                    %s, %s, %s,
-                    'Manual inspection completed',
-                    %s,
-                    'Available',
-                    'Low',
-                    100,
-                    %s,
-                    %s
-                )
-            """, (
-                asset_id if route_asset_type == 'PC' else None,  # pcid
-                history_asset_type,
-                asset_id,                                 # accession_id for DEVICE
-                old['status'],
-                'System',
-                'Marked as checked manually'
-            ))
+            technician = current_technician()
+            log_maintenance_event(
+                cur,
+                asset_type=history_asset_type,
+                asset_id=asset_id,
+                pcid=asset_id if route_asset_type == 'PC' else None,
+                action='Manual inspection completed',
+                maintenance_type='Inspection',
+                old_status=old['status'],
+                new_status='Available',
+                risk_level='Low',
+                health_score=100,
+                technician=technician,
+                performed_by=technician,
+                remarks='Marked as checked manually',
+            )
 
         conn.commit()
         return jsonify(success=True)

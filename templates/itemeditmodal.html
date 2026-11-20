@@ -80,6 +80,9 @@
         <datalist id="itemTypeOptions">
           <option value="Device"></option>
           <option value="PC"></option>
+          <option value="Component"></option>
+          <option value="Peripheral"></option>
+          <option value="Accessory"></option>
           <option value="Consumable"></option>
         </datalist>
       </div>
@@ -128,6 +131,9 @@
           class="w-full p-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 text-black">
           <option value="Available">Available</option>
           <option value="IN USE">IN USE</option>
+          <option value="Needs Fixing">Needs Fixing</option>
+          <option value="Defective">Defective</option>
+          <option value="For Disposal">For Disposal</option>
           <option value="Inactive">Inactive</option>
           <option value="Damaged">Damaged</option>
         </select>
@@ -422,6 +428,9 @@ async function openItemModal(itemData = null) {
     quantity.readOnly = false;
     quantity.value = '';
     quantity.classList.remove('bg-gray-100', 'cursor-not-allowed');
+
+    // Category pages prefill the item type so new records stay on that page.
+    deviceTypeInput.value = window.INVENTORY_DEFAULT_DEVICE_TYPE || 'Device';
 
     // Generate Serials
     function generateSerial(prefix="SN") {

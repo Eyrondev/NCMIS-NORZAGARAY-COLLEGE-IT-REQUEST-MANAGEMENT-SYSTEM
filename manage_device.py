@@ -41,7 +41,16 @@ manage_device_bp = Blueprint(
 ALLOWED_PER_PAGE = {10, 25, 50, 100}
 DEFAULT_PER_PAGE = 10
 
-STATUS_OPTIONS = ["Available", "IN USE", "Inactive", "Damaged", "Surrendered"]
+STATUS_OPTIONS = [
+    "Available",
+    "IN USE",
+    "Needs Fixing",
+    "Defective",
+    "For Disposal",
+    "Inactive",
+    "Damaged",
+    "Surrendered",
+]
 USAGE_SCOPE_OPTIONS = [
     ("UNASSIGNED", "Not assigned"),
     ("PC", "Assigned to a PC"),
@@ -318,12 +327,34 @@ def _fetch_stats(state):
                     SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('in use', 'in used', 'inuse') THEN 1 ELSE 0 END) AS in_use,
                     SUM(CASE WHEN LOWER(COALESCE(status, '')) = 'available' THEN 1 ELSE 0 END) AS available,
                     SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('damaged', 'damage', 'unusable') THEN 1 ELSE 0 END) AS damaged,
-                    SUM(CASE WHEN LOWER(COALESCE(risk_level, '')) = 'high' THEN 1 ELSE 0 END) AS high_risk
+                    SUM(CASE WHEN LOWER(COALESCE(risk_level, '')) = 'high' THEN 1 ELSE 0 END) AS high_risk,
+                    SUM(
+                        CASE
+                            WHEN LOWER(COALESCE(df.status, '')) IN ('damaged', 'damage', 'unusable') THEN 0
+                            WHEN df.last_checked IS NULL THEN 1
+                            WHEN DATEDIFF(CURDATE(), df.last_checked) >= GREATEST(1, CASE WHEN IFNULL(df.maintenance_interval_days, 30) < 365 THEN IFNULL(df.maintenance_interval_days, 30) * 365 ELSE IFNULL(df.maintenance_interval_days, 30) END) THEN 1
+                            WHEN DATEDIFF(CURDATE(), df.last_checked) >= (GREATEST(1, CASE WHEN IFNULL(df.maintenance_interval_days, 30) < 365 THEN IFNULL(df.maintenance_interval_days, 30) * 365 ELSE IFNULL(df.maintenance_interval_days, 30) END) * 0.8) THEN 1
+                            ELSE 0
+                        END
+                    ) AS maintenance_due
                 FROM devices_full df
                 WHERE {_base_device_where()}
                 """
             )
             row = cur.fetchone() or {}
+
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS archived
+                FROM devices_full df
+                WHERE (
+                    COALESCE(df.is_archived, 0) = 1
+                    OR LOWER(COALESCE(df.status, '')) IN ('archived', 'surrendered')
+                )
+                AND LOWER(COALESCE(df.device_type, '')) <> '{DEVICE_TYPE_EXCLUDED}'
+                """
+            )
+            archived_row = cur.fetchone() or {}
     finally:
         conn.close()
 
@@ -333,6 +364,8 @@ def _fetch_stats(state):
         "available": row.get("available") or 0,
         "damaged": row.get("damaged") or 0,
         "high_risk": row.get("high_risk") or 0,
+        "maintenance_due": row.get("maintenance_due") or 0,
+        "archived": archived_row.get("archived") or 0,
     }
 
 
